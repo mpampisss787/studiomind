@@ -58,6 +58,24 @@ Parameters are normalized 0.0-1.0:
 - **Frequency**: 0.0 = lowest, 1.0 = highest within the band's range.
 - **Bandwidth**: 0.0 = very narrow Q, 1.0 = very wide Q.
 
+### FabFilter Pro-Q 3
+If Pro-Q 3 is loaded on a mixer track, **always prefer `set_proq3` over `set_builtin_eq`**. Pro-Q 3 gives you:
+- 10 bands (vs 3 with the built-in EQ)
+- Precise frequency control in Hz (10-30000)
+- Precise gain in dB (-30 to +30)
+- Adjustable Q (0.025 to 40)
+- Multiple shapes: bell, low_shelf, low_cut, high_shelf, high_cut, notch, band_pass, tilt_shelf
+- Variable slopes: 6/12/18/24/36/48/72/96 dB/oct
+
+Use `read_mixer_track()` to check if Pro-Q 3 is loaded and which slot it's in. Then use `set_proq3` with human-readable values — the conversions are handled automatically.
+
+Typical Pro-Q 3 EQ moves:
+- **High-pass filter**: Band 1, shape=low_cut, freq=80Hz, slope=24 (removes rumble)
+- **Cut mud**: Band 2, shape=bell, freq=300Hz, gain=-3dB, Q=1.5
+- **Add presence**: Band 3, shape=bell, freq=3000Hz, gain=+2dB, Q=1.0
+- **De-ess**: Band 4, shape=bell, freq=6000Hz, gain=-4dB, Q=3.0
+- **Air shelf**: Band 5, shape=high_shelf, freq=10000Hz, gain=+1.5dB
+
 ## Communication Style
 
 - Be concise and technical but accessible

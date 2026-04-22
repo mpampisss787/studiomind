@@ -10,7 +10,7 @@
 | **Status** | Core infrastructure complete — needs Windows FL Studio testing |
 | **Target DAW** | FL Studio (Windows) |
 | **Stack** | Python CLI · Claude API (Sonnet/Opus) · SysEx over virtual MIDI · FL Python device script |
-| **MVP Scope** | EQ-focused mixing agent (11 tools) |
+| **MVP Scope** | EQ-focused mixing agent (12 tools, Pro-Q 3 support) |
 | **Lines of Code** | ~2400 across 15 Python files |
 | **Tests** | 7 protocol tests passing |
 
@@ -42,12 +42,18 @@ FL Studio
 | `src/studiomind/analyzer/spectral.py` | FFT, LUFS, spectral balance, masking detection |
 | `src/studiomind/cli.py` | CLI: ports, ping, state, eq, agent, chat, shell |
 
-## MVP Tools (11)
+## MVP Tools (12)
 
 **Read (safe):** `read_project_state`, `read_mixer_track`, `read_channel`, `analyze_audio`
 **Render (safe):** `render_and_analyze` (master, stem, or full_mix mode — triggers FL export via pywinauto)
-**Write (destructive — require snapshot):** `set_builtin_eq`, `set_plugin_param`, `set_mixer_volume`, `set_mixer_pan`
+**Write (destructive — require snapshot):** `set_builtin_eq`, `set_proq3`, `set_plugin_param`, `set_mixer_volume`, `set_mixer_pan`
 **Safety:** `snapshot`, `revert`
+
+## Plugin Profiles
+
+| Plugin | File | Status |
+|--------|------|--------|
+| FabFilter Pro-Q 3 | `src/studiomind/plugins/fabfilter_proq3.py` | Complete — 10 bands, Hz/dB/Q conversions |
 
 ## API Constraints (Discovered)
 

@@ -258,6 +258,69 @@ TOOL_SCHEMAS = [
             "required": ["mode"],
         },
     },
+    {
+        "name": "set_proq3",
+        "description": (
+            "Set FabFilter Pro-Q 3 EQ bands using human-readable values (Hz, dB, Q). "
+            "This is the PREFERRED tool for EQ adjustments when Pro-Q 3 is loaded on a track. "
+            "It handles all parameter conversions automatically.\n\n"
+            "Pro-Q 3 has 10 bands. Each band can be: bell, low_shelf, low_cut, high_shelf, "
+            "high_cut, notch, band_pass, or tilt_shelf.\n\n"
+            "ALWAYS call snapshot() before using this tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track_id": {
+                    "type": "integer",
+                    "description": "Mixer track index",
+                },
+                "slot": {
+                    "type": "integer",
+                    "description": "FX slot where Pro-Q 3 is loaded (0-9)",
+                },
+                "band": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Pro-Q 3 band number (1-10)",
+                },
+                "frequency_hz": {
+                    "type": "number",
+                    "minimum": 10,
+                    "maximum": 30000,
+                    "description": "Center frequency in Hz (10-30000)",
+                },
+                "gain_db": {
+                    "type": "number",
+                    "minimum": -30,
+                    "maximum": 30,
+                    "description": "Gain in dB (-30 to +30, 0=unity)",
+                },
+                "q": {
+                    "type": "number",
+                    "minimum": 0.025,
+                    "maximum": 40,
+                    "description": "Q factor / bandwidth (0.025=very wide, 40=very narrow, 1.0=default)",
+                },
+                "shape": {
+                    "type": "string",
+                    "enum": ["bell", "low_shelf", "low_cut", "high_shelf", "high_cut", "notch", "band_pass", "tilt_shelf"],
+                    "description": "Filter shape (default: bell)",
+                },
+                "slope_db_oct": {
+                    "type": "integer",
+                    "enum": [6, 12, 18, 24, 36, 48, 72, 96],
+                    "description": "Filter slope in dB/oct (for cut/shelf shapes, default: 12)",
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether the band is active (default: true)",
+                },
+            },
+            "required": ["track_id", "slot", "band"],
+        },
+    },
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -268,6 +331,7 @@ TOOL_SCHEMAS = [
 DESTRUCTIVE_TOOLS = {
     "set_builtin_eq",
     "set_plugin_param",
+    "set_proq3",
     "set_mixer_volume",
     "set_mixer_pan",
 }
@@ -341,6 +405,41 @@ class ToolExecutor:
 
         result = analyze_audio(params["path"])
         return result.to_dict()
+
+    def _exec_set_proq3(self, params: dict) -> Any:
+        from studiomind.plugins.fabfilter_proq3 import build_eq_commands, param_to_freq, param_to_gain, param_to_q
+
+        commands = build_eq_commands(
+            track_id=params["track_id"],
+            slot=params["slot"],
+            band=params["band"],
+            frequency_hz=params.get("frequency_hz"),
+            gain_db=params.get("gain_db"),
+            q=params.get("q"),
+            shape=params.get("shape"),
+            slope_db_oct=params.get("slope_db_oct"),
+            enabled=params.get("enabled", True),
+        )
+
+        results = []
+        for cmd in commands:
+            result = self._fl.set_plugin_param(
+                track_id=cmd["track_id"],
+                slot=cmd["slot"],
+                param_id=cmd["param_id"],
+                value=cmd["value"],
+            )
+            results.append(result)
+
+        return {
+            "ok": True,
+            "band": params["band"],
+            "params_set": len(commands),
+            "frequency_hz": params.get("frequency_hz"),
+            "gain_db": params.get("gain_db"),
+            "q": params.get("q"),
+            "shape": params.get("shape"),
+        }
 
     def _exec_render_and_analyze(self, params: dict) -> Any:
         if self._render is None:
