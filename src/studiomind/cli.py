@@ -167,6 +167,17 @@ def cmd_chat(args: argparse.Namespace) -> None:
     print("\nDisconnected.")
 
 
+def cmd_web(args: argparse.Namespace) -> None:
+    """Launch the web chat UI."""
+    try:
+        from studiomind.web.app import start
+    except ImportError:
+        print("Web UI requires extra dependencies. Install with:")
+        print("  pip install studiomind[web]")
+        return
+    start(host=args.host, port=args.port)
+
+
 def cmd_interactive(args: argparse.Namespace) -> None:
     """Interactive command shell."""
     with FLStudio() as fl:
@@ -247,6 +258,11 @@ def main() -> None:
     chat_parser = sub.add_parser("chat", help="Interactive agent chat session")
     chat_parser.add_argument("--model", type=str, help="Claude model (default: sonnet)")
 
+    # web
+    web_parser = sub.add_parser("web", help="Launch web chat UI")
+    web_parser.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
+    web_parser.add_argument("--port", type=int, default=8040, help="Port (default: 8040)")
+
     # shell (low-level)
     sub.add_parser("shell", help="Low-level command shell (no AI)")
 
@@ -263,6 +279,7 @@ def main() -> None:
         "eq": cmd_eq,
         "agent": cmd_agent,
         "chat": cmd_chat,
+        "web": cmd_web,
         "shell": cmd_interactive,
     }
 
