@@ -7,58 +7,71 @@
 | Key | Value |
 |-----|-------|
 | **Project Dir** | `~/studiomind` |
-| **Status** | Pre-development — API research phase |
+| **Status** | Core infrastructure complete — needs Windows FL Studio testing |
 | **Target DAW** | FL Studio (Windows) |
-| **Stack** | Tauri (Rust + Web frontend) · Python FL bridge · Claude API |
-| **MVP Scope** | EQ-only mixing agent (6 tools) |
+| **Stack** | Python CLI · Claude API (Sonnet/Opus) · SysEx over virtual MIDI · FL Python device script |
+| **MVP Scope** | EQ-focused mixing agent (10 tools) |
+| **Lines of Code** | ~2400 across 15 Python files |
+| **Tests** | 7 protocol tests passing |
 
 ## Architecture
 
 ```
-Companion App (Tauri)
-  ├── Chat UI
-  ├── Agent Loop (plan → act → verify → iterate)
-  └── Tool Dispatcher
-        ├── MIDI Bridge → FL Python device script
-        ├── Stem Renderer → triggers FL render, reads wavs
-        └── Audio Analyzer → FFT, LUFS, transients, key
+Python CLI / Agent Loop
+  ├── Claude API (tool use) — plan → act → verify → iterate
+  ├── Tool Executor — dispatches to FL bridge or local analysis
+  └── MIDI Client (python-rtmidi)
+        ↕ SysEx over loopMIDI virtual port
+FL Studio
+  └── device_StudioMind.py (MIDI Controller Script)
+        ├── OnSysEx() → decode → dispatch → respond
+        └── 13 command handlers (read/write/safety)
 ```
 
-### Control Channels
-- **Virtual MIDI** (loopMIDI) — structured commands between app and FL
-- **FL Python device script** — installed in FL's `Hardware` folder, executes API calls
-- **Filesystem** — stem rendering (FL writes wavs, app reads them)
-- **UI automation** (pywinauto) — escape hatch for unreachable API operations
+### Key Files
 
-## MVP Tools (6)
+| File | Purpose |
+|------|---------|
+| `scripts/device_StudioMind.py` | FL Studio controller script (self-contained, 420 lines) |
+| `src/studiomind/protocol.py` | SysEx encode/decode/chunk protocol |
+| `src/studiomind/bridge/midi_client.py` | MIDI I/O (python-rtmidi, threaded) |
+| `src/studiomind/bridge/commands.py` | Typed `FLStudio` class |
+| `src/studiomind/agent/loop.py` | Core agent loop with Claude tool use |
+| `src/studiomind/agent/tools.py` | 10 tool schemas + `ToolExecutor` |
+| `src/studiomind/agent/prompt.py` | Mixing engineer system prompt (3800 chars) |
+| `src/studiomind/analyzer/spectral.py` | FFT, LUFS, spectral balance, masking detection |
+| `src/studiomind/cli.py` | CLI: ports, ping, state, eq, agent, chat, shell |
 
-1. `read_project_state()` — project snapshot (BPM, key, channels, mixer, patterns)
-2. `render_stem(mixer_track_id, bars_range)` — bounce one track to wav
-3. `analyze_audio(wav_path)` — spectral, LUFS, peak, transients, key
-4. `add_plugin(track_id, "Fruity Parametric EQ 2")` — add stock EQ
-5. `set_plugin_param(track_id, slot, param_id, value)` — configure EQ bands
-6. `snapshot()` / `revert()` — safety net
+## MVP Tools (10)
 
-## Development Phases
+**Read (safe):** `read_project_state`, `read_mixer_track`, `read_channel`, `analyze_audio`
+**Write (destructive — require snapshot):** `set_builtin_eq`, `set_plugin_param`, `set_mixer_volume`, `set_mixer_pan`
+**Safety:** `snapshot`, `revert`
 
-1. **API Research** — Map FL Python scripting API surface ← CURRENT
-2. **Spike: MIDI round-trip** — Prove bridge plumbing works
-3. **Spike: stem render** — Trigger FL render from companion app
-4. **Tool schemas** — JSON schemas for 6 MVP tools
-5. **Agent loop** — LLM + tool dispatcher + preview gate + chat UI
-6. **Vertical slice** — "Cut 2dB at 300Hz on the piano" end-to-end
-7. **Full MVP** — "Mix this professionally" flow
+## API Constraints (Discovered)
 
-## Key Design Principles
+- `add_plugin()` is NOT in FL API → use built-in 3-band EQ (`mixer.setEqGain/Frequency/Bandwidth`)
+- `render/bounce` is NOT in FL API → need pywinauto UI automation
+- MIDI notes not accessible from controller scripts → use PyFLP for offline parsing
+- FL Python has NO sockets, filesystem, or subprocess — SysEx over MIDI only
+- Built-in EQ params are normalized 0.0-1.0 (gain 0.5 = unity/0dB)
+- VST `getParamCount` always returns 4240 — check param names to find real ones
 
-- **Preview by default** — show plan before executing
-- **Every action reversible** — auto-snapshot before mutations
-- **Agent listens to its work** — re-render + analyze after changes
-- **User can interrupt** — pause stops the loop cleanly
+## Development Status
+
+1. ~~API Research~~ — Complete, 1000-line reference doc in vault
+2. ~~SysEx Protocol~~ — Complete, 7 tests passing
+3. ~~FL Device Script~~ — Complete, 13 commands
+4. ~~MIDI Client~~ — Complete, threaded async
+5. ~~Agent Loop~~ — Complete, Claude tool use + preview gate
+6. **Windows round-trip test** ← NEXT
+7. Vertical slice ("Cut 2dB at 300Hz on piano")
+8. Full MVP ("Mix this professionally")
 
 ## DO NOT
 
 - Do not auto-execute destructive actions without snapshot
-- Do not hardcode FL version-specific parameter IDs — use version detection + param map
+- Do not hardcode FL version-specific parameter IDs — use version detection
 - Do not assume virtual MIDI driver is installed — handle gracefully
 - Do not ship third-party VST support in MVP — stock plugins only
+- Do not use `setChannelPitch(mode=2)` — it's BROKEN in the FL API
