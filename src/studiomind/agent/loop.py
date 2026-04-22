@@ -96,12 +96,13 @@ class AgentLoop:
     def action_log(self) -> ActionLog:
         return self._action_log
 
-    def run(self, user_goal: str) -> str:
+    def run(self, user_goal: str, continue_conversation: bool = False) -> str:
         """
         Run the agent loop for a user goal.
 
         Args:
             user_goal: Natural language instruction (e.g., "Mix this professionally")
+            continue_conversation: If True, append to existing conversation history
 
         Returns:
             The agent's final text response (summary of what was done)
@@ -109,7 +110,13 @@ class AgentLoop:
         self._action_log = ActionLog()
 
         system = build_system_prompt()
-        messages: list[dict] = [{"role": "user", "content": user_goal}]
+
+        if continue_conversation and hasattr(self, "_conversation_history"):
+            self._conversation_history.append({"role": "user", "content": user_goal})
+            messages = self._conversation_history
+        else:
+            messages = [{"role": "user", "content": user_goal}]
+            self._conversation_history = messages
 
         # Convert our tool schemas to Anthropic format
         tools = [

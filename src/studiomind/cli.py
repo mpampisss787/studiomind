@@ -146,6 +146,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
     with FLStudio() as fl:
         agent = AgentLoop(fl, config)
         print("Connected. Chat with StudioMind (Ctrl+C to quit):\n")
+        first_message = True
         while True:
             try:
                 goal = input("You: ").strip()
@@ -156,7 +157,8 @@ def cmd_chat(args: argparse.Namespace) -> None:
             if goal.lower() in ("quit", "exit"):
                 break
             try:
-                agent.run(goal)
+                agent.run(goal, continue_conversation=not first_message)
+                first_message = False
             except KeyboardInterrupt:
                 print("\n[Interrupted]")
             except Exception as e:
