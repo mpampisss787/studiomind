@@ -122,13 +122,7 @@ class AgentLoop:
         for turn in range(self._config.max_turns):
             logger.info("Agent turn %d/%d", turn + 1, self._config.max_turns)
 
-            response = self._client.messages.create(
-                model=self._config.model,
-                max_tokens=4096,
-                system=system,
-                tools=tools,
-                messages=messages,
-            )
+            response = self._api_call_with_retry(system, tools, messages)
 
             # Collect text and tool_use blocks
             assistant_content = response.content
@@ -176,6 +170,28 @@ class AgentLoop:
                 )
 
         return final_text
+
+    def _api_call_with_retry(self, system: str, tools: list, messages: list, max_retries: int = 5) -> Any:
+        """Call the Anthropic API with exponential backoff on rate limits."""
+        import anthropic
+
+        for attempt in range(max_retries):
+            try:
+                return self._client.messages.create(
+                    model=self._config.model,
+                    max_tokens=4096,
+                    system=system,
+                    tools=tools,
+                    messages=messages,
+                )
+            except anthropic.RateLimitError as e:
+                if attempt == max_retries - 1:
+                    raise
+                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s, 80s
+                logger.warning("Rate limited. Waiting %ds before retry %d/%d...", wait, attempt + 1, max_retries)
+                if self._config.on_message:
+                    self._config.on_message(f"[Rate limited — waiting {wait}s before retry...]")
+                time.sleep(wait)
 
     def _execute_tool(self, tool_name: str, tool_input: dict, tool_use_id: str) -> dict:
         """Execute a single tool call with safety checks."""
