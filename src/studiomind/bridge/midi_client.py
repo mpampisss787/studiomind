@@ -11,8 +11,6 @@ import threading
 import time
 from typing import Callable
 
-import rtmidi
-
 from studiomind.protocol import (
     MSG_REQUEST,
     Message,
@@ -20,6 +18,11 @@ from studiomind.protocol import (
     SequenceCounter,
     encode,
 )
+
+try:
+    import rtmidi
+except ImportError:
+    rtmidi = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +39,17 @@ def find_port(api: rtmidi.MidiIn | rtmidi.MidiOut, pattern: str) -> int | None:
     return None
 
 
+def _require_rtmidi() -> None:
+    if rtmidi is None:
+        raise ImportError(
+            "python-rtmidi is required for MIDI communication. "
+            "Install it with: pip install python-rtmidi"
+        )
+
+
 def list_ports() -> dict[str, list[str]]:
     """List all available MIDI input and output ports."""
+    _require_rtmidi()
     midi_in = rtmidi.MidiIn()
     midi_out = rtmidi.MidiOut()
     result = {
@@ -77,6 +89,7 @@ class MidiClient:
 
     def connect(self) -> None:
         """Open MIDI input and output ports."""
+        _require_rtmidi()
         # Output port (companion → FL)
         self._midi_out = rtmidi.MidiOut()
         out_idx = find_port(self._midi_out, self._output_pattern)

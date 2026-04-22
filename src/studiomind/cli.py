@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import sys
+from typing import Any
 
 from studiomind.bridge.midi_client import MidiClient, list_ports
 from studiomind.bridge.commands import FLStudio
@@ -66,6 +67,102 @@ def cmd_eq(args: argparse.Namespace) -> None:
         else:
             result = fl.get_eq(args.track)
             print(f"EQ for track {args.track}: {json.dumps(result, indent=2)}")
+
+
+def cmd_agent(args: argparse.Namespace) -> None:
+    """Run the AI agent with a natural language goal."""
+    from studiomind.agent.loop import AgentConfig, AgentLoop
+
+    goal = " ".join(args.goal)
+    if not goal:
+        print("Usage: studiomind agent <goal>")
+        print('Example: studiomind agent "Mix this professionally"')
+        return
+
+    def on_message(text: str) -> None:
+        print(f"\n{text}")
+
+    def on_tool_call(tool_name: str, tool_input: dict) -> bool:
+        print(f"\n  [Agent wants to: {tool_name}({json.dumps(tool_input, default=str)})]")
+        if args.auto:
+            print("  [Auto-approved]")
+            return True
+        try:
+            answer = input("  Approve? [Y/n] ").strip().lower()
+            return answer in ("", "y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            return False
+
+    def on_tool_result(tool_name: str, result: Any) -> None:
+        # Show brief result for read operations
+        if tool_name.startswith("read_") or tool_name == "analyze_audio":
+            preview = json.dumps(result, default=str)
+            if len(preview) > 200:
+                preview = preview[:200] + "..."
+            print(f"  [Result: {preview}]")
+        elif isinstance(result, dict) and result.get("ok"):
+            print(f"  [Done: {tool_name}]")
+
+    config = AgentConfig(
+        model=args.model or "claude-sonnet-4-5-20250929",
+        auto_approve=args.auto,
+        on_message=on_message,
+        on_tool_call=on_tool_call,
+        on_tool_result=on_tool_result,
+    )
+
+    print(f"Connecting to FL Studio...")
+    with FLStudio() as fl:
+        print(f"Connected. Running agent with goal: {goal}\n")
+        agent = AgentLoop(fl, config)
+        try:
+            result = agent.run(goal)
+        except KeyboardInterrupt:
+            print("\n\nAgent interrupted by user.")
+            result = None
+
+        print(f"\n{agent.action_log.summary()}")
+
+
+def cmd_chat(args: argparse.Namespace) -> None:
+    """Interactive agent chat — multiple goals in one session."""
+    from studiomind.agent.loop import AgentConfig, AgentLoop
+
+    def on_message(text: str) -> None:
+        print(f"\n{text}")
+
+    def on_tool_call(tool_name: str, tool_input: dict) -> bool:
+        print(f"\n  [{tool_name}({json.dumps(tool_input, default=str)[:100]})]")
+        return True  # Auto-approve in chat mode
+
+    config = AgentConfig(
+        model=args.model if hasattr(args, "model") and args.model else "claude-sonnet-4-5-20250929",
+        auto_approve=True,
+        on_message=on_message,
+        on_tool_call=on_tool_call,
+    )
+
+    print("Connecting to FL Studio...")
+    with FLStudio() as fl:
+        agent = AgentLoop(fl, config)
+        print("Connected. Chat with StudioMind (Ctrl+C to quit):\n")
+        while True:
+            try:
+                goal = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not goal:
+                continue
+            if goal.lower() in ("quit", "exit"):
+                break
+            try:
+                agent.run(goal)
+            except KeyboardInterrupt:
+                print("\n[Interrupted]")
+            except Exception as e:
+                print(f"\n[Error: {e}]")
+
+    print("\nDisconnected.")
 
 
 def cmd_interactive(args: argparse.Namespace) -> None:
@@ -138,8 +235,18 @@ def main() -> None:
     eq_parser.add_argument("--freq", type=float, help="Frequency (0.0-1.0)")
     eq_parser.add_argument("--bw", type=float, help="Bandwidth (0.0-1.0)")
 
-    # interactive
-    sub.add_parser("shell", help="Interactive command shell")
+    # agent
+    agent_parser = sub.add_parser("agent", help="Run AI agent with a natural language goal")
+    agent_parser.add_argument("goal", nargs="+", help="What you want the agent to do")
+    agent_parser.add_argument("--model", type=str, help="Claude model (default: sonnet)")
+    agent_parser.add_argument("--auto", action="store_true", help="Auto-approve destructive actions")
+
+    # chat
+    chat_parser = sub.add_parser("chat", help="Interactive agent chat session")
+    chat_parser.add_argument("--model", type=str, help="Claude model (default: sonnet)")
+
+    # shell (low-level)
+    sub.add_parser("shell", help="Low-level command shell (no AI)")
 
     args = parser.parse_args()
 
@@ -152,6 +259,8 @@ def main() -> None:
         "ping": cmd_ping,
         "state": cmd_state,
         "eq": cmd_eq,
+        "agent": cmd_agent,
+        "chat": cmd_chat,
         "shell": cmd_interactive,
     }
 
