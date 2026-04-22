@@ -226,6 +226,38 @@ TOOL_SCHEMAS = [
             "required": ["path"],
         },
     },
+    {
+        "name": "render_and_analyze",
+        "description": (
+            "Render audio from FL Studio and analyze it. Supports three modes:\n"
+            "- 'master': Render the full mix.\n"
+            "- 'stem': Solo a specific mixer track, render it, then unsolo.\n"
+            "- 'full_mix': Render master + all active stems, detect frequency masking conflicts.\n"
+            "Returns spectral analysis, LUFS, peak, and masking data. "
+            "This is the primary 'verify' tool — use it after making EQ/volume changes "
+            "to confirm the mix improved."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["master", "stem", "full_mix"],
+                    "description": "Render mode: 'master' for full mix, 'stem' for single track, 'full_mix' for all stems + masking analysis",
+                },
+                "track_id": {
+                    "type": "integer",
+                    "description": "Mixer track index (required for 'stem' mode, ignored otherwise)",
+                },
+                "track_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "Specific mixer track IDs for 'full_mix' mode (optional — defaults to all active tracks)",
+                },
+            },
+            "required": ["mode"],
+        },
+    },
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -246,6 +278,7 @@ READ_ONLY_TOOLS = {
     "read_mixer_track",
     "read_channel",
     "analyze_audio",
+    "render_and_analyze",
     "snapshot",
     "revert",
 }
@@ -254,8 +287,9 @@ READ_ONLY_TOOLS = {
 class ToolExecutor:
     """Executes tool calls by dispatching to FLStudio commands or local analysis."""
 
-    def __init__(self, fl: FLStudio) -> None:
+    def __init__(self, fl: FLStudio, render_pipeline: Any | None = None) -> None:
         self._fl = fl
+        self._render = render_pipeline  # Optional RenderPipeline instance
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> Any:
         """Execute a tool call and return the result."""
@@ -307,3 +341,28 @@ class ToolExecutor:
 
         result = analyze_audio(params["path"])
         return result.to_dict()
+
+    def _exec_render_and_analyze(self, params: dict) -> Any:
+        if self._render is None:
+            # Lazy-init if not provided
+            from studiomind.render.pipeline import RenderPipeline
+
+            self._render = RenderPipeline(self._fl)
+
+        mode = params["mode"]
+        if mode == "master":
+            result = self._render.render_master()
+            return result.to_dict()
+        elif mode == "stem":
+            track_id = params.get("track_id")
+            if track_id is None:
+                return {"error": "track_id is required for 'stem' mode"}
+            result = self._render.render_stem(track_id)
+            return result.to_dict()
+        elif mode == "full_mix":
+            track_ids = params.get("track_ids")
+            return self._render.analyze_mix(
+                stems=self._render.render_all_stems(track_ids) if track_ids else None,
+            )
+        else:
+            return {"error": f"Unknown render mode: {mode}"}
