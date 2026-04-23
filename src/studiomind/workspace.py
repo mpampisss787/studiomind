@@ -480,25 +480,21 @@ class WorkspaceSession:
         batch: bool = False,
     ) -> bool:
         """
-        Set the output path and click Save/Start in FL's export dialog.
+        Type the output path into the Save As dialog and press Enter/Save.
 
-        Uses pure Win32 messages (WM_SETTEXT, BM_CLICK) so we never need
-        global keyboard focus — the dialog hwnd is the direct target.
+        The dialog already has keyboard focus (detected via foreground change).
+        We use SendInput to type each character directly — this is guaranteed
+        to land in the focused control regardless of window class or framework.
         """
         try:
             import ctypes
+            import ctypes.wintypes as wintypes
 
-            user32   = ctypes.windll.user32   # type: ignore[attr-defined]
-            WM_SETTEXT = 0x000C
-            BM_CLICK   = 0x00F5
-            # Standard Windows file-dialog filename field IDs
-            IDC_FILENAME = 1152   # ComboBoxEx in common dialog
-            IDOK         = 1
-
+            user32   = ctypes.windll.user32  # type: ignore[attr-defined]
             path_str = str(output_dir).rstrip("\\") + "\\"
-            logger.info("Configuring export dialog 0x%x — path: %s", dialog_hwnd, path_str)
+            logger.info("Typing path into dialog 0x%x: %s", dialog_hwnd, path_str)
 
-            # ── 1. Find every child control ───────────────────────────
+            # Log dialog children for diagnostics
             child_info: list[dict] = []
             ChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
 
@@ -514,42 +510,59 @@ class WorkspaceSession:
             for c in child_info:
                 logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
 
-            # ── 2. Set path in filename / folder field ────────────────
-            # Strategy A: standard Windows common-dialog filename control
-            filename_ctrl = user32.GetDlgItem(dialog_hwnd, IDC_FILENAME)
-            if filename_ctrl:
-                user32.SendMessageW(filename_ctrl, WM_SETTEXT, 0, path_str)
-                logger.info("Set path via DlgItem 1152")
-            else:
-                # Strategy B: find any Edit or ComboBox child and set it
-                for c in child_info:
-                    if c["cls"].lower() in ("edit", "comboboxex32", "combobox", "tquickedit"):
-                        user32.SendMessageW(c["hwnd"], WM_SETTEXT, 0, path_str)
-                        logger.info("Set path via %s hwnd=0x%x", c["cls"], c["hwnd"])
-                        break
+            # Define INPUT structures for SendInput
+            INPUT_KEYBOARD     = 1
+            KEYEVENTF_UNICODE  = 0x0004
+            KEYEVENTF_KEYUP    = 0x0002
+            VK_RETURN          = 0x0D
+            VK_CONTROL         = 0x11
+            VK_A               = 0x41
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk",         ctypes.c_ushort),
+                    ("wScan",       ctypes.c_ushort),
+                    ("dwFlags",     ctypes.c_ulong),
+                    ("time",        ctypes.c_ulong),
+                    ("dwExtraInfo", ctypes.c_ulong),
+                ]
+
+            class INPUT(ctypes.Structure):
+                _fields_ = [("type", ctypes.c_ulong), ("ki", KEYBDINPUT)]
+
+            def ki_down(vk=0, scan=0, flags=0):
+                return INPUT(INPUT_KEYBOARD, KEYBDINPUT(vk, scan, flags, 0, 0))
+
+            def ki_up(vk=0, scan=0, flags=0):
+                return INPUT(INPUT_KEYBOARD, KEYBDINPUT(vk, scan, flags | KEYEVENTF_KEYUP, 0, 0))
+
+            def send_inputs(*inputs):
+                arr = (INPUT * len(inputs))(*inputs)
+                user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+
+            # Ctrl+A to select all in the filename field, then type the path
+            send_inputs(ki_down(VK_CONTROL), ki_down(VK_A))
+            send_inputs(ki_up(VK_A), ki_up(VK_CONTROL))
+            time.sleep(0.05)
+
+            # Type each character via Unicode SendInput
+            for ch in path_str:
+                code = ord(ch)
+                send_inputs(ki_down(scan=code, flags=KEYEVENTF_UNICODE))
+                send_inputs(ki_up(scan=code,  flags=KEYEVENTF_UNICODE))
 
             time.sleep(0.1)
 
-            # ── 3. Click Save / Start / OK ────────────────────────────
-            # Strategy A: standard IDOK button
-            ok_ctrl = user32.GetDlgItem(dialog_hwnd, IDOK)
-            if ok_ctrl:
-                user32.SendMessageW(ok_ctrl, BM_CLICK, 0, 0)
-                logger.info("Clicked IDOK (standard Save/OK)")
-                return True
+            # Press Enter to confirm / navigate
+            send_inputs(ki_down(VK_RETURN))
+            send_inputs(ki_up(VK_RETURN))
+            time.sleep(0.3)
 
-            # Strategy B: find button by text
-            synonyms = {"start", "ok", "save", "export", "render", "&save", "&start"}
-            for c in child_info:
-                if c["text"].strip().lower() in synonyms:
-                    user32.SendMessageW(c["hwnd"], BM_CLICK, 0, 0)
-                    logger.info("Clicked %r (cls=%s)", c["text"], c["cls"])
-                    return True
+            # Press Enter again to click Save/OK (some dialogs need two confirmations)
+            send_inputs(ki_down(VK_RETURN))
+            send_inputs(ki_up(VK_RETURN))
 
-            # Strategy C: WM_COMMAND with IDOK to the dialog itself
-            WM_COMMAND = 0x0111
-            user32.SendMessageW(dialog_hwnd, WM_COMMAND, IDOK, 0)
-            logger.info("Sent WM_COMMAND IDOK to dialog")
+            logger.info("Typed path + pressed Enter×2")
             return True
 
         except Exception as e:
