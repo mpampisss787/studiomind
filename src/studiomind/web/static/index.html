@@ -178,6 +178,7 @@
       font-size: 11px;
       cursor: pointer;
       transition: all 0.15s;
+      line-height: 1.5;
     }
     .ref-drop-zone:hover,
     .ref-drop-zone.drag-over {
@@ -185,6 +186,38 @@
       color: var(--accent);
       background: var(--accent-dim);
     }
+    .ref-drop-zone .ref-drop-target {
+      display: block;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      margin-top: 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .ref-drop-zone.uploading {
+      border-color: #eab308;
+      border-style: solid;
+      color: #eab308;
+    }
+    .ref-drop-zone.success {
+      border-color: var(--success);
+      border-style: solid;
+      color: var(--success);
+    }
+    .ref-drop-zone .ref-spinner {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 6px;
+      vertical-align: -2px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     .sidebar-refresh {
       margin-top: auto;
@@ -845,7 +878,8 @@
       <h3>References</h3>
       <div id="sbReferences"></div>
       <div class="ref-drop-zone" id="sbRefDrop">
-        Drop audio file or click to upload
+        <span id="sbRefDropLabel">Drop audio or click to upload</span>
+        <span class="ref-drop-target" id="sbRefDropTarget"></span>
         <input type="file" id="sbRefFileInput" accept="audio/*,.wav,.mp3,.flac,.aiff,.ogg,.m4a" style="display:none" />
       </div>
     </div>
@@ -1361,8 +1395,36 @@
     const sbMasters = document.getElementById('sbMasters');
     const sbReferences = document.getElementById('sbReferences');
     const sbRefDrop = document.getElementById('sbRefDrop');
+    const sbRefDropLabel = document.getElementById('sbRefDropLabel');
+    const sbRefDropTarget = document.getElementById('sbRefDropTarget');
     const sbRefFileInput = document.getElementById('sbRefFileInput');
     const sbRefreshBtn = document.getElementById('sbRefreshBtn');
+
+    // Remember the current project name so the drop zone can show the destination
+    let currentProjectName = null;
+
+    function setDropZoneIdle() {
+      sbRefDrop.className = 'ref-drop-zone';
+      sbRefDropLabel.textContent = 'Drop audio or click to upload';
+      if (currentProjectName) {
+        sbRefDropTarget.textContent = `→ ${currentProjectName} / references/`;
+      } else {
+        sbRefDropTarget.textContent = '';
+      }
+    }
+
+    function setDropZoneUploading(filename) {
+      sbRefDrop.className = 'ref-drop-zone uploading';
+      sbRefDropLabel.innerHTML = `<span class="ref-spinner"></span>Uploading ${filename}...`;
+      sbRefDropTarget.textContent = '';
+    }
+
+    function setDropZoneSuccess(filename) {
+      sbRefDrop.className = 'ref-drop-zone success';
+      sbRefDropLabel.textContent = `Saved: ${filename}`;
+      sbRefDropTarget.textContent = `→ ${currentProjectName} / references/`;
+      setTimeout(setDropZoneIdle, 2000);
+    }
 
     function fmtLufs(analysis) {
       if (!analysis || analysis.lufs === undefined || analysis.lufs === null) return '--';
@@ -1418,6 +1480,7 @@
         const data = await res.json();
 
         if (!data.active) {
+          currentProjectName = null;
           sbProjectName.textContent = 'No active project';
           sbProjectMeta.textContent = '';
           sbInactiveMsg.textContent = data.reason || 'Waiting for FL Studio...';
@@ -1426,6 +1489,13 @@
           sbMastersSec.style.display = 'none';
           sbReferencesSec.style.display = 'none';
           return;
+        }
+
+        currentProjectName = data.project_name;
+        // Keep drop-zone target label fresh (and idle if not mid-upload)
+        if (!sbRefDrop.classList.contains('uploading') &&
+            !sbRefDrop.classList.contains('success')) {
+          setDropZoneIdle();
         }
 
         sbInactiveMsg.style.display = 'none';
@@ -1457,17 +1527,26 @@
     }
 
     async function uploadReference(file) {
+      if (!currentProjectName) {
+        alert("No active project — can't upload a reference. Open a FL project first.");
+        return;
+      }
       const form = new FormData();
       form.append('file', file);
+      setDropZoneUploading(file.name);
       try {
         const res = await fetch('/api/workspace/reference', { method: 'POST', body: form });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
+          setDropZoneIdle();
           alert('Upload failed: ' + (err.detail || res.statusText));
           return;
         }
+        const data = await res.json().catch(() => ({}));
+        setDropZoneSuccess(data.filename || file.name);
         refreshSidebar();
       } catch (e) {
+        setDropZoneIdle();
         alert('Upload error: ' + e.message);
       }
     }
