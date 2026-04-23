@@ -262,7 +262,7 @@ def cmd_web(args: argparse.Namespace) -> None:
         print("Web UI requires extra dependencies. Install with:")
         print("  pip install studiomind[web]")
         return
-    start(host=args.host, port=args.port)
+    start(host=args.host, port=args.port, reload=getattr(args, "reload", False))
 
 
 def cmd_interactive(args: argparse.Namespace) -> None:
@@ -362,6 +362,7 @@ def main() -> None:
     web_parser = sub.add_parser("web", help="Launch web chat UI")
     web_parser.add_argument("--host", default="127.0.0.1", help="Host (default: 127.0.0.1)")
     web_parser.add_argument("--port", type=int, default=8040, help="Port (default: 8040)")
+    web_parser.add_argument("--reload", action="store_true", help="Auto-reload on code changes (dev mode)")
 
     # shell (low-level)
     sub.add_parser("shell", help="Low-level command shell (no AI)")

@@ -419,11 +419,19 @@ async def websocket_chat(ws: WebSocket):
             pass
 
 
-def start(host: str = "127.0.0.1", port: int = 8040):
+def start(host: str = "127.0.0.1", port: int = 8040, reload: bool = False):
     """Start the StudioMind web server."""
     import uvicorn
     import webbrowser
 
     print(f"\n  StudioMind Web UI: http://{host}:{port}\n")
+    if reload:
+        print("  Auto-reload ON — server restarts on code changes.\n")
     webbrowser.open(f"http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    uvicorn.run(
+        "studiomind.web.app:app",
+        host=host,
+        port=port,
+        log_level="warning",
+        reload=reload,
+    )
