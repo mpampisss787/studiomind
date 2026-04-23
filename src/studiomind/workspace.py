@@ -22,6 +22,7 @@ Design invariants:
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -423,6 +424,8 @@ class WorkspaceSession:
         self._watcher_thread: threading.Thread | None = None
         # Track (path -> (last_size, stable_count)) for size-stability detection
         self._pending_sizes: dict[str, tuple[int, int]] = {}
+        # Transient retry counter for _adopt_batch_master (WinError 32 / EBUSY)
+        self._master_adopt_attempts: dict[str, int] = {}
         # Analyzer injection — defaults to studiomind.analyzer.spectral.analyze_audio
         self._analyze_fn = analyze_fn
 
@@ -1174,13 +1177,28 @@ class WorkspaceSession:
             if track_id is not None:
                 return self._manifest.stems.get(track_id)
             if filename is not None:
-                rec = self._manifest.stems.get(-1)  # no-op
                 for r in self._manifest.stems.values():
                     if r.filename == filename:
                         return r
                 for r in self._manifest.masters:
                     if r.filename == filename:
                         return r
+                # Master-filename fallback: the agent often asks for a
+                # timestamped name it expected (master_<ts>.wav) but FL writes
+                # its own name ("<project>_Master.wav") which then gets
+                # adopted. If no exact match AND the request looks like a
+                # master name, bind to the most recent READY master.
+                if filename.startswith("master_") or "master" in filename.lower():
+                    ready_masters = [
+                        r for r in self._manifest.masters if r.status == STATUS_READY
+                    ]
+                    if ready_masters:
+                        # Newest first — rendered_at is set when watcher flips
+                        # to READY, so this is the freshest master we have.
+                        return max(
+                            ready_masters,
+                            key=lambda r: r.rendered_at or 0.0,
+                        )
         return None
 
     def _build_collect_result(self, rec: RenderRecord) -> dict:
@@ -1238,24 +1256,54 @@ class WorkspaceSession:
         stem_slug = slugify(Path(filename).stem)
         return stem_slug == "master" or stem_slug.endswith("_master")
 
+    # WinError 32 (file in use) + ERROR_ACCESS_DENIED (5) + EBUSY: transient.
+    # FL can still hold a write handle for a moment after the bytes have
+    # flushed and the file-size-stability check has passed. We'd rather
+    # defer the move than destroy an in-flight master. Give up only after
+    # this many consecutive failed adopt attempts.
+    _MASTER_ADOPT_MAX_RETRIES = 10
+
     def _adopt_batch_master(self, wav_path: Path) -> None:
         """
         Move an FL-batch-exported master WAV from stems/ to masters/ and register
         it in the manifest. If a file already exists at the destination (e.g.
         from a previous session), we overwrite it — the just-rendered version
-        is the fresh one we want.
+        is the fresh one we want. If FL still has the file locked (`WinError 32`),
+        defer and retry on the next watcher tick rather than deleting the source.
         """
         dest = self._project.masters_dir / wav_path.name
+        key = str(wav_path)
         try:
             # shutil.move overwrites on Windows; Path.rename does not.
             shutil.move(str(wav_path), str(dest))
+            self._master_adopt_attempts.pop(key, None)
         except OSError as e:
-            logger.warning("Could not move batch master %s → %s: %s", wav_path, dest, e)
-            # Delete the orphan in stems/ so the watcher doesn't retry forever.
+            attempts = self._master_adopt_attempts.get(key, 0) + 1
+            self._master_adopt_attempts[key] = attempts
+            # winerror 32 (sharing violation), errno EACCES/EBUSY are all
+            # transient — FL still has the handle open. Back off, retry later.
+            transient = (
+                getattr(e, "winerror", None) in (32, 5)
+                or e.errno in (errno.EACCES, errno.EBUSY)
+            )
+            if transient and attempts < self._MASTER_ADOPT_MAX_RETRIES:
+                logger.debug(
+                    "Master adopt deferred (attempt %d/%d) — FL still holds the handle: %s",
+                    attempts, self._MASTER_ADOPT_MAX_RETRIES, wav_path.name,
+                )
+                return
+            logger.warning(
+                "Could not move batch master %s → %s after %d attempts: %s",
+                wav_path, dest, attempts, e,
+            )
+            # Non-transient failure or retries exhausted. Delete so the watcher
+            # stops seeing a file it can't act on. A genuine master will have
+            # been written again on the next render anyway.
             try:
                 wav_path.unlink()
             except OSError:
                 pass
+            self._master_adopt_attempts.pop(key, None)
             return
 
         state_hash = None

@@ -321,6 +321,137 @@ def test_watcher_prefers_specific_over_generic_slug(tmp_path: Path):
         sess.stop()
 
 
+def test_collect_master_fallback_by_filename_pattern(tmp_path: Path):
+    """
+    Regression: the agent calls prepare_master_render which generates
+    'master_<ts>.wav', but when batch-mode is on FL writes its own
+    '<project>_Master.wav' which gets adopted under that name. collect_render
+    with the agent-expected 'master_<ts>.wav' should find the most recent
+    READY master instead of failing.
+    """
+    from studiomind.workspace import KIND_MASTER, RenderRecord, STATUS_READY
+    import time as _time
+
+    fl = FakeFL()
+    project = open_project("Demo", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    # Simulate the state after an FL-named master landed and got adopted
+    ready_master = RenderRecord(
+        kind=KIND_MASTER,
+        filename="Demo_Master.wav",  # FL's own naming
+        status=STATUS_READY,
+        rendered_at=_time.time(),
+    )
+    sess.manifest.masters.append(ready_master)
+    project.save_manifest(sess.manifest)
+    _write_fake_wav(project.masters_dir / "Demo_Master.wav")
+
+    # Agent asks for its own expected name — must find Demo_Master.wav
+    result = sess.collect(filename="master_1776980454.wav", timeout_s=1.0)
+    assert result["ok"] is True
+    assert result["filename"] == "Demo_Master.wav"
+    assert result["kind"] == KIND_MASTER
+
+
+def test_collect_master_fallback_picks_newest(tmp_path: Path):
+    from studiomind.workspace import KIND_MASTER, RenderRecord, STATUS_READY
+
+    fl = FakeFL()
+    project = open_project("Demo", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    older = RenderRecord(
+        kind=KIND_MASTER, filename="Demo_Master_old.wav",
+        status=STATUS_READY, rendered_at=1000.0,
+    )
+    newer = RenderRecord(
+        kind=KIND_MASTER, filename="Demo_Master_new.wav",
+        status=STATUS_READY, rendered_at=2000.0,
+    )
+    sess.manifest.masters.extend([older, newer])
+    project.save_manifest(sess.manifest)
+    _write_fake_wav(project.masters_dir / "Demo_Master_old.wav")
+    _write_fake_wav(project.masters_dir / "Demo_Master_new.wav")
+
+    result = sess.collect(filename="master_does_not_exist.wav", timeout_s=1.0)
+    assert result["filename"] == "Demo_Master_new.wav"
+
+
+def test_master_adopt_defers_on_transient_lock(tmp_path: Path, monkeypatch):
+    """
+    Regression 2026-04-24: observed `WinError 32` (file in use) during master
+    adoption when FL still held a write handle after the size-stability check
+    passed. Previous behavior: delete the source file (destroying the master).
+    Fixed behavior: defer until the handle releases, retry on next watcher
+    tick. Only give up (and delete) after many attempts.
+    """
+    import shutil as _shutil
+    from studiomind.workspace import WorkspaceSession
+
+    fl = FakeFL()
+    project = open_project("Demo", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    # Put a "master" file in stems/ as if FL batch-exported it.
+    src = project.stems_dir / "Demo_Master.wav"
+    _write_fake_wav(src)
+
+    # Simulate Windows sharing-violation on the first move attempt.
+    call_count = {"n": 0}
+    real_move = _shutil.move
+
+    def flaky_move(srcp, dstp):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            err = OSError(13, "Access is denied")
+            err.winerror = 32  # ERROR_SHARING_VIOLATION
+            raise err
+        return real_move(srcp, dstp)
+
+    monkeypatch.setattr("studiomind.workspace.shutil.move", flaky_move)
+
+    # First adopt call: hits the transient error, defers (does NOT delete source)
+    sess._adopt_batch_master(src)
+    assert src.exists(), "transient failure must NOT delete the source master"
+    assert not (project.masters_dir / "Demo_Master.wav").exists()
+    assert sess._master_adopt_attempts.get(str(src)) == 1
+
+    # Second adopt call: move succeeds, attempts counter cleared
+    sess._adopt_batch_master(src)
+    assert not src.exists()
+    assert (project.masters_dir / "Demo_Master.wav").exists()
+    assert str(src) not in sess._master_adopt_attempts
+
+
+def test_master_adopt_gives_up_after_max_retries(tmp_path: Path, monkeypatch):
+    from studiomind.workspace import WorkspaceSession
+
+    fl = FakeFL()
+    project = open_project("Demo", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    src = project.stems_dir / "Demo_Master.wav"
+    _write_fake_wav(src)
+
+    def always_locked(srcp, dstp):
+        err = OSError(13, "Access is denied")
+        err.winerror = 32
+        raise err
+
+    monkeypatch.setattr("studiomind.workspace.shutil.move", always_locked)
+
+    max_retries = WorkspaceSession._MASTER_ADOPT_MAX_RETRIES
+    for i in range(max_retries):
+        sess._adopt_batch_master(src)
+        if i < max_retries - 1:
+            assert src.exists(), f"attempt {i + 1} must not delete yet"
+
+    # On the Nth attempt, give up and clean up the source
+    assert not src.exists()
+    assert str(src) not in sess._master_adopt_attempts
+
+
 def test_detect_external_changes_reports_diff(tmp_path: Path):
     fl = FakeFL()
     project = open_project("Demo", root=tmp_path)
