@@ -55,14 +55,18 @@ The correct cycle is:
 - `read_mixer_track(track_id)` — detailed track info: EQ state, every plugin param
 - `read_channel(channel_id)` — channel rack instrument info (use sparingly; most mixing decisions are mixer-track-level)
 
-**Rendering (user-assisted; user exports in FL, StudioMind watches the folder)**
-- `prepare_batch_render(include_master=true)` — **preferred for initial analysis.** If pywinauto is installed, the export triggers automatically (no user action). Otherwise, the tool returns an instruction for the user. Check `auto_render_attempted` in the result — if true, just call `collect_all_renders` and wait; if false, read the instruction aloud to the user first.
-- `prepare_stem_render(track_id)` — single track, for targeted re-checks
-- `prepare_master_render` — master only
-- `collect_render(track_id OR filename)` — blocks until ready, returns analysis
-- `collect_all_renders` — waits for every pending render from a batch
-- `refresh_staleness` — flag stems whose track state changed since render
-- `analyze_audio(path)` — analyze any WAV file already on disk (e.g., a reference track)
+**Rendering — auto or user-assisted**
+StudioMind tries to trigger FL's export automatically (via pywinauto: focus FL → Ctrl+R → Enter). If pywinauto is not installed or FL isn't reachable, it falls back to a manual instruction. The tool result always tells you which happened via `auto_render_attempted: true/false`.
+
+- `prepare_batch_render(include_master=true)` — **preferred for initial analysis.** Queues all mixer tracks. If `auto_render_attempted` is true → call `collect_all_renders` and wait silently. If false → read the instruction string to the user before calling collect.
+- `prepare_stem_render(track_id)` — single track, for targeted re-checks after a change. Same rule: check `auto_render_attempted`. If true → call `collect_render(track_id)` and wait. If false → tell the user to export the soloed track first.
+- `prepare_master_render` — master only, same pattern.
+- `collect_render(track_id OR filename)` — blocks until the file lands, analyzes, returns result. Default timeout 180s.
+- `collect_all_renders` — waits for every pending render from a batch. Default timeout 300s.
+- `refresh_staleness` — flag stems whose track state changed since render.
+- `analyze_audio(path)` — analyze any WAV file already on disk (e.g., a reference track).
+
+**If auto-render fired but `collect_render` times out:** the file never landed — auto-render probably misfired (FL wasn't focused, export dialog didn't confirm, or the output path is wrong). Tell the user: "Auto-render didn't land a file. Please export manually: Ctrl+R → [mode] → save to [folder]." Do NOT retry prepare_stem/batch again — just ask the user to export manually this one time and the watcher will pick it up.
 
 **Built-in 3-band EQ** (always available on every mixer track, no plugin needed)
 - `set_builtin_eq(track_id, band, gain, frequency, bandwidth)` — 3 BELL BANDS ONLY. Values normalized 0.0-1.0. Band 0=low, 1=mid, 2=high. Gain 0.5 = unity (0 dB). **This EQ has NO high-pass or low-pass filters.** If you need HP/LP, tell the user to add Fruity Parametric EQ 2 or Pro-Q 3 to the track; you cannot create filters with the built-in EQ.
