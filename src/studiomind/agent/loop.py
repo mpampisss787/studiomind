@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 # so config changes take effect on the next agent session without a restart.
 MAX_TURNS = 30  # Safety limit on agent loop iterations
 
+# Compaction: when the estimated token count of the conversation history exceeds
+# this threshold, summarise old turns with Haiku (cheap + fast) and replace them
+# with a compact context block. Keeps cost and attention quality stable over long
+# sessions without losing the important decisions.
+COMPACTION_TOKEN_THRESHOLD = 12_000
+COMPACTION_KEEP_RECENT_TURNS = 4   # always keep the last N turn-pairs verbatim
+COMPACTION_MODEL = "claude-haiku-4-5-20251001"  # cheap summariser
+
 
 @dataclass
 class ActionLog:
@@ -119,6 +127,96 @@ class AgentLoop:
         """Signal the agent to stop at the next check point (between turns and inside blocking tools)."""
         self._stop_event.set()
 
+    # ── Conversation compaction ──────────────────────────────────
+
+    @staticmethod
+    def _estimate_tokens(messages: list) -> int:
+        """Rough token estimate: 1 token ≈ 4 chars of JSON."""
+        try:
+            return len(json.dumps(messages, default=str)) // 4
+        except Exception:
+            return 0
+
+    def _compact_history(self, messages: list) -> list:
+        """
+        Summarise the older portion of the conversation using Haiku, then return
+        a trimmed message list:
+          [summarised-context-user-msg, ack-assistant-msg, ...last N turn-pairs verbatim]
+
+        The summary preserves: measurements (LUFS, Hz, dB), changes applied and
+        whether they were accepted/reverted, current project state, open issues.
+        Cheap and fast — Haiku is used so compaction barely registers on the bill.
+        """
+        import anthropic
+
+        # Separate history into "old" (to compact) and "recent" (to keep verbatim).
+        # Messages come in pairs: user + assistant. A turn-pair = 2 messages.
+        keep_count = COMPACTION_KEEP_RECENT_TURNS * 2
+        if len(messages) <= keep_count + 2:
+            return messages  # not enough to compact
+
+        old_messages   = messages[:-keep_count]
+        recent_messages = messages[-keep_count:]
+
+        old_text = json.dumps(old_messages, default=str, ensure_ascii=False)
+
+        compaction_prompt = (
+            "You are summarising a StudioMind mixing session for context compaction.\n"
+            "Produce a concise summary (≤400 words) that preserves:\n"
+            "- Audio measurements: LUFS, dB values, spectral band readings, true peak\n"
+            "- Changes applied: which track, what was changed, exact values\n"
+            "- User decisions: which changes were kept vs reverted\n"
+            "- Current project state: what's been fixed, what's still open\n"
+            "- Any user preferences or constraints stated during the session\n"
+            "Discard: verbose tool outputs, re-reads of unchanged state, conversational filler.\n\n"
+            f"Session to summarise:\n{old_text}"
+        )
+
+        try:
+            resp = self._client.messages.create(
+                model=COMPACTION_MODEL,
+                max_tokens=600,
+                messages=[{"role": "user", "content": compaction_prompt}],
+            )
+            summary = resp.content[0].text.strip()
+        except Exception as e:
+            logger.warning("Compaction failed: %s — keeping full history", e)
+            return messages
+
+        compacted = [
+            {
+                "role": "user",
+                "content": (
+                    "[Context from earlier in this session — auto-compacted to save tokens]\n\n"
+                    + summary
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "Understood. I have the context from earlier. Continuing.",
+            },
+        ] + recent_messages
+
+        logger.info(
+            "History compacted: %d → %d messages (was ~%d tokens)",
+            len(messages),
+            len(compacted),
+            self._estimate_tokens(old_messages),
+        )
+        return compacted
+
+    def _maybe_compact(self, messages: list) -> list:
+        """Compact the history if it exceeds the token threshold. Returns updated list."""
+        if self._estimate_tokens(messages) < COMPACTION_TOKEN_THRESHOLD:
+            return messages
+        logger.info("History approaching token limit — compacting...")
+        compacted = self._compact_history(messages)
+        if compacted is not messages and self._config.on_message:
+            self._config.on_message(
+                "[Session history auto-compacted to keep responses fast and focused.]"
+            )
+        return compacted
+
     def run(self, user_goal: str, continue_conversation: bool = False) -> str:
         """
         Run the agent loop for a user goal.
@@ -206,6 +304,10 @@ class AgentLoop:
             # Append assistant message + tool results to conversation
             messages.append({"role": "assistant", "content": assistant_content})
             messages.append({"role": "user", "content": tool_results})
+
+            # Compact history if it's grown too large
+            messages = self._maybe_compact(messages)
+            self._conversation_history = messages
 
             # Check stop reason
             if response.stop_reason == "end_turn":
