@@ -385,7 +385,8 @@
       margin-bottom: 6px;
     }
 
-    .modal-field input {
+    .modal-field input,
+    .modal-field select {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -398,7 +399,8 @@
       transition: border-color 0.15s;
     }
 
-    .modal-field input:focus { border-color: var(--accent); }
+    .modal-field input:focus,
+    .modal-field select:focus { border-color: var(--accent); }
 
     .modal-source {
       font-size: 12px;
@@ -534,6 +536,11 @@
         />
         <div class="modal-source" id="keySource"></div>
       </div>
+      <div class="modal-field">
+        <label for="modelSelect">Model</label>
+        <select id="modelSelect"></select>
+        <div class="modal-source" id="modelHint"></div>
+      </div>
       <a class="modal-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">
         Get an API key &rarr;
       </a>
@@ -559,9 +566,13 @@
     const settingsSubtitle = document.getElementById('settingsSubtitle');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const keySource = document.getElementById('keySource');
+    const modelSelect = document.getElementById('modelSelect');
+    const modelHint = document.getElementById('modelHint');
     const settingsSaveBtn = document.getElementById('settingsSaveBtn');
     const settingsCancelBtn = document.getElementById('settingsCancelBtn');
     const settingsError = document.getElementById('settingsError');
+
+    let cachedModels = [];
 
     let ws;
     let isProcessing = false;
@@ -586,7 +597,7 @@
           settingsCancelBtn.style.display = 'none';
         } else {
           settingsTitle.textContent = 'Settings';
-          settingsSubtitle.textContent = 'Manage your Anthropic API key. The key is stored locally.';
+          settingsSubtitle.textContent = 'Manage your API key and model. Both are stored locally.';
           settingsCancelBtn.style.display = '';
         }
         apiKeyInput.value = '';
@@ -601,10 +612,39 @@
           keySource.textContent = 'No API key configured yet.';
           keySource.className = 'modal-source';
         }
+        // Populate model dropdown
+        cachedModels = s.available_models || [];
+        modelSelect.innerHTML = '';
+        cachedModels.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = m.label;
+          modelSelect.appendChild(opt);
+        });
+        // If the active model isn't in the curated list (env override, power user), add it
+        if (s.model && !cachedModels.find(m => m.id === s.model)) {
+          const opt = document.createElement('option');
+          opt.value = s.model;
+          opt.textContent = s.model + ' (custom)';
+          modelSelect.appendChild(opt);
+        }
+        modelSelect.value = s.model;
+        updateModelHint(s.model_source);
         settingsModal.classList.add('active');
         setTimeout(() => apiKeyInput.focus(), 50);
       });
     }
+
+    function updateModelHint(source) {
+      const selected = cachedModels.find(m => m.id === modelSelect.value);
+      const hint = selected ? selected.hint : '';
+      let prefix = '';
+      if (source === 'env') prefix = 'STUDIOMIND_MODEL env override is active. ';
+      else if (source === 'default') prefix = '(default) ';
+      modelHint.textContent = prefix + (hint || '');
+    }
+
+    modelSelect && modelSelect.addEventListener('change', () => updateModelHint('config'));
 
     function closeSettings() {
       settingsModal.classList.remove('active');
@@ -612,21 +652,31 @@
 
     async function saveSettings() {
       const key = apiKeyInput.value.trim();
+      const model = modelSelect.value;
       settingsError.textContent = '';
-      if (!key) {
-        settingsError.textContent = 'Please enter an API key.';
+
+      const payload = {};
+      if (key) {
+        if (!key.startsWith('sk-')) {
+          settingsError.textContent = "API key should start with 'sk-'.";
+          return;
+        }
+        payload.anthropic_api_key = key;
+      }
+      if (model) {
+        payload.model = model;
+      }
+      if (Object.keys(payload).length === 0) {
+        settingsError.textContent = 'Enter an API key or change the model.';
         return;
       }
-      if (!key.startsWith('sk-')) {
-        settingsError.textContent = "API key should start with 'sk-'.";
-        return;
-      }
+
       settingsSaveBtn.disabled = true;
       try {
         const res = await fetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ anthropic_api_key: key }),
+          body: JSON.stringify(payload),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
@@ -634,8 +684,8 @@
           return;
         }
         closeSettings();
-        configured = true;
-        // Reconnect the WS with the new key active
+        if (payload.anthropic_api_key) configured = true;
+        // Reconnect the WS so the new model takes effect on the next agent turn
         if (ws && ws.readyState === WebSocket.OPEN) ws.close();
         connectWS();
       } catch (e) {

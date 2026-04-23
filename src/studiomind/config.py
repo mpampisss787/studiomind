@@ -16,6 +16,30 @@ import os
 import sys
 from pathlib import Path
 
+# Current default model. Sonnet 4.6 gives a good balance of speed, cost, and
+# tool-use accuracy for StudioMind's measure -> diagnose -> act loop.
+DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# Models StudioMind knows about. Users can pick any of these from the web UI;
+# CLI --model accepts arbitrary strings for power users.
+AVAILABLE_MODELS: list[dict[str, str]] = [
+    {
+        "id": "claude-sonnet-4-6",
+        "label": "Sonnet 4.6 (recommended)",
+        "hint": "Balanced speed and mixing accuracy — the default.",
+    },
+    {
+        "id": "claude-opus-4-7",
+        "label": "Opus 4.7",
+        "hint": "Deepest reasoning on complex mixes. Slower, higher cost.",
+    },
+    {
+        "id": "claude-haiku-4-5-20251001",
+        "label": "Haiku 4.5",
+        "hint": "Fastest and cheapest. Good for quick tweaks; weaker on multi-step analysis.",
+    },
+]
+
 
 def get_config_dir() -> Path:
     if sys.platform == "win32":
@@ -87,3 +111,26 @@ def key_preview(key: str | None = None) -> str | None:
     if len(key) <= 12:
         return key[:4] + "..."
     return key[:8] + "..." + key[-4:]
+
+
+def get_model() -> str:
+    """Return the active model: env var STUDIOMIND_MODEL wins, then config, then default."""
+    override = os.environ.get("STUDIOMIND_MODEL")
+    if override:
+        return override
+    return load_config().get("model") or DEFAULT_MODEL
+
+
+def set_model(model: str) -> None:
+    cfg = load_config()
+    cfg["model"] = model.strip()
+    save_config(cfg)
+
+
+def model_source() -> str:
+    """Returns 'env', 'config', or 'default'."""
+    if os.environ.get("STUDIOMIND_MODEL"):
+        return "env"
+    if load_config().get("model"):
+        return "config"
+    return "default"

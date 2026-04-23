@@ -23,8 +23,8 @@ from studiomind.workspace import WorkspaceSession
 
 logger = logging.getLogger(__name__)
 
-# Default model — Sonnet for speed + tool use quality, Opus for complex decisions
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+# Default model is sourced from studiomind.config at AgentConfig construction time
+# so config changes take effect on the next agent session without a restart.
 MAX_TURNS = 30  # Safety limit on agent loop iterations
 
 
@@ -55,11 +55,18 @@ class ActionLog:
         return f"Actions taken ({len(self.entries)} total):\n" + "\n".join(lines)
 
 
+def _default_model() -> str:
+    """Pull the active model out of persistent config each time an AgentConfig is made."""
+    from studiomind.config import get_model
+
+    return get_model()
+
+
 @dataclass
 class AgentConfig:
     """Configuration for the agent loop."""
 
-    model: str = DEFAULT_MODEL
+    model: str = field(default_factory=_default_model)
     max_turns: int = MAX_TURNS
     auto_approve: bool = False  # If True, skip user confirmation for destructive actions
     on_message: Callable[[str], None] | None = None  # Callback for agent text output

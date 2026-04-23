@@ -178,13 +178,15 @@ def cmd_agent(args: argparse.Namespace) -> None:
         elif isinstance(result, dict) and result.get("ok"):
             print(f"  [Done: {tool_name}]")
 
-    config = AgentConfig(
-        model=args.model or "claude-sonnet-4-5-20250929",
-        auto_approve=args.auto,
-        on_message=on_message,
-        on_tool_call=on_tool_call,
-        on_tool_result=on_tool_result,
-    )
+    config_kwargs: dict[str, Any] = {
+        "auto_approve": args.auto,
+        "on_message": on_message,
+        "on_tool_call": on_tool_call,
+        "on_tool_result": on_tool_result,
+    }
+    if args.model:
+        config_kwargs["model"] = args.model
+    config = AgentConfig(**config_kwargs)
 
     print(f"Connecting to FL Studio...")
     with FLStudio() as fl:
@@ -213,12 +215,15 @@ def cmd_chat(args: argparse.Namespace) -> None:
         print(f"\n  [{tool_name}({json.dumps(tool_input, default=str)[:100]})]")
         return True  # Auto-approve in chat mode
 
-    config = AgentConfig(
-        model=args.model if hasattr(args, "model") and args.model else "claude-sonnet-4-5-20250929",
-        auto_approve=True,
-        on_message=on_message,
-        on_tool_call=on_tool_call,
-    )
+    config_kwargs: dict[str, Any] = {
+        "auto_approve": True,
+        "on_message": on_message,
+        "on_tool_call": on_tool_call,
+    }
+    model_arg = getattr(args, "model", None)
+    if model_arg:
+        config_kwargs["model"] = model_arg
+    config = AgentConfig(**config_kwargs)
 
     print("Connecting to FL Studio...")
     with FLStudio() as fl:
