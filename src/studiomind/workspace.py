@@ -651,12 +651,12 @@ class WorkspaceSession:
                 raise ValueError(
                     f"No pending render matches track_id={track_id!r} filename={filename!r}"
                 )
-            if rec.status == STATUS_READY and rec.analysis is None:
-                # Watcher flipped it ready; we still need to analyze
+            if rec.status == STATUS_READY:
+                # Watcher flipped it ready — always run fresh analysis.
+                # Clear any previous analysis so the collect_render call always
+                # reflects the file that JUST landed, not a cached old result.
+                rec.analysis = None
                 break
-            if rec.status == STATUS_READY and rec.analysis is not None:
-                # Already analyzed (e.g., a re-collect)
-                return self._build_collect_result(rec)
             time.sleep(0.25)
         else:
             raise TimeoutError(

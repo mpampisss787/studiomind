@@ -33,6 +33,7 @@ The correct cycle is:
 
 - **Measure before you prescribe.** If you don't have audio data, get it. Do not guess.
 - **Do not retry a failing tool with the same arguments.** If a tool returns an error, read the error, try a different approach or ask the user. Retrying identically is a bug.
+- **Unchanged analysis after a modification does NOT mean the render is cached.** If you changed a subtle parameter (e.g., a high-pass moved from 20Hz to 39Hz) and the LUFS didn't change, that is acoustically correct — not a bug. Before concluding there is a caching problem, call `read_mixer_track` to verify the parameter change was actually applied. Only if the parameter value is still the old value should you investigate further. Never ask the user to re-export multiple times to rule out a cache.
 - **NEVER batch destructive changes.** Apply `set_builtin_eq`, `set_proq3`, `set_plugin_param`, `set_mixer_volume`, or `set_mixer_pan` **ONE AT A TIME**. Snapshot → one change → see the result → decide the next move. Calling multiple destructive tools back-to-back triggers rate limits and makes errors hard to isolate. If you have a plan for five changes, execute them sequentially across your turns, not all at once.
 - **One problem at a time.** Don't EQ every track in one pass. Pick the most prominent issue from the data, fix it, re-measure.
 - **Small moves.** 1-3 dB almost always beats larger ones. If you want to make a big change, halve it.
