@@ -526,45 +526,40 @@ class WorkspaceSession:
                     filename_edit = c["hwnd"]
                     break
 
-            # Check current folder by looking at the address bar text.
-            # If it already ends with our target folder name, skip path setting.
+            # Check current folder. If already correct, skip path entry.
             target_folder_name = Path(path_str.rstrip("\\")).name.lower()
             already_correct_folder = False
             for c in child_info:
                 if "address:" in c["text"].lower():
-                    current_folder = c["text"].lower()
-                    if current_folder.rstrip("\\").endswith(target_folder_name):
+                    if c["text"].lower().rstrip("\\").endswith(target_folder_name):
                         already_correct_folder = True
-                        print(f"[AutoRender] Already in correct folder — skipping path set", flush=True)
+                        print(f"[AutoRender] Already in correct folder", flush=True)
                     break
 
-            if not already_correct_folder and filename_edit:
-                WM_KEYDOWN = 0x0100
-                WM_KEYUP   = 0x0101
-                VK_RETURN  = 0x0D
-
-                user32.SendMessageW(filename_edit, WM_SETTEXT, 0, path_str)
-                print(f"[AutoRender] Set filename field: {path_str}", flush=True)
-                user32.SendMessageW(filename_edit, WM_KEYDOWN, VK_RETURN, 0)
-                user32.SendMessageW(filename_edit, WM_KEYUP,   VK_RETURN, 0)
-                time.sleep(0.6)
-                print("[AutoRender] Navigated to stems folder", flush=True)
-
-            # ── Click &Save ────────────────────────────────────────────
-            # FL auto-generates the filename for batch exports.
-            save_synonyms = {"&save", "save", "&open", "start", "ok"}
-            for c in child_info:
-                if c["text"].strip().lower() in save_synonyms and c["cls"].lower() == "button":
-                    user32.SendMessageW(c["hwnd"], BM_CLICK, 0, 0)
-                    print(f"[AutoRender] Clicked {c['text']!r} (hwnd=0x{c['hwnd']:x})", flush=True)
-                    logger.info("Clicked %r", c["text"])
-                    return True
-
-            # Fallback: Alt+S (keyboard shortcut for &Save)
             from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
-            send_keys("%s")  # Alt+S
-            print("[AutoRender] No Save button found — sent Alt+S shortcut", flush=True)
-            logger.info("Sent Alt+S fallback")
+
+            # When a Save As dialog opens, the filename Edit has focus by default.
+            # Use pywinauto send_keys (which routes through SendInput) so the
+            # dialog properly processes navigation + Save. WM_SETTEXT + WM_KEYDOWN
+            # bypasses Windows' dialog processing and doesn't actually navigate.
+            if not already_correct_folder:
+                # Select all in filename field, type full path, Enter to navigate
+                send_keys("^a")
+                time.sleep(0.05)
+                # Escape special chars for send_keys: (){}[]+^%~
+                # Paths contain none of these typically, but backslash is safe
+                send_keys(path_str, with_spaces=True, pause=0.005)
+                print(f"[AutoRender] Typed path into filename field", flush=True)
+                time.sleep(0.1)
+                send_keys("{ENTER}")          # navigate to folder
+                time.sleep(0.8)                # wait for navigation
+                print("[AutoRender] Navigated via Enter", flush=True)
+
+            # Now click Save by pressing Enter again (default button is Save)
+            # OR use the Alt+S accelerator shortcut (&Save)
+            send_keys("%s")   # Alt+S — reliably clicks &Save button
+            print("[AutoRender] Sent Alt+S to click Save", flush=True)
+            logger.info("Sent Alt+S to trigger &Save")
             return True
 
         except Exception as e:
