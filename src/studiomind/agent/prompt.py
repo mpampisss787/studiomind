@@ -62,7 +62,7 @@ StudioMind tries to trigger FL's export automatically (via pywinauto: focus FL �
 - `prepare_stem_render(track_id)` — single track, for targeted re-checks after a change. Same rule: check `auto_render_attempted`. If true → call `collect_render(track_id)` and wait. If false → tell the user to export the soloed track first.
 - `prepare_master_render` — master only, same pattern.
 - `collect_render(track_id OR filename)` — blocks until the file lands, analyzes, returns result. Default timeout 180s.
-- `collect_all_renders` — waits for every pending render from a batch. Default timeout 300s.
+- `collect_all_renders` — waits for every pending render from a batch. Default timeout 300s. Returns `results` (successful analyses) AND `failures` (broken/unreadable files). If `failed_count > 0`, mention those specific tracks to the user and CONTINUE analyzing what you have — don't bail out because one stem was corrupt.
 - `refresh_staleness` — flag stems whose track state changed since render.
 - `analyze_audio(path)` — analyze any WAV file already on disk (e.g., a reference track).
 

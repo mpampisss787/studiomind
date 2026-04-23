@@ -698,22 +698,39 @@ class ToolExecutor:
                 if m["status"] == "ready" and ("master", m["filename"]) not in collected_ids
             ]
 
+            failures: list[dict] = []
+
             for s in ready_stems:
-                r = workspace.collect(
-                    track_id=s["track_id"],
-                    timeout_s=5.0,
-                    stop_event=self._stop_event,
-                )
-                results.append(r)
+                try:
+                    r = workspace.collect(
+                        track_id=s["track_id"],
+                        timeout_s=5.0,
+                        stop_event=self._stop_event,
+                    )
+                    results.append(r)
+                except Exception as e:
+                    # Broken file (corrupt WAV, permission error, etc.) -
+                    # skip this stem and keep collecting the rest.
+                    failures.append({
+                        "track_id": s["track_id"],
+                        "filename": s.get("filename"),
+                        "error": str(e),
+                    })
                 collected_ids.add(("stem", s["track_id"]))
 
             for m in ready_masters:
-                r = workspace.collect(
-                    filename=m["filename"],
-                    timeout_s=5.0,
-                    stop_event=self._stop_event,
-                )
-                results.append(r)
+                try:
+                    r = workspace.collect(
+                        filename=m["filename"],
+                        timeout_s=5.0,
+                        stop_event=self._stop_event,
+                    )
+                    results.append(r)
+                except Exception as e:
+                    failures.append({
+                        "filename": m["filename"],
+                        "error": str(e),
+                    })
                 collected_ids.add(("master", m["filename"]))
 
             if not pending_stems and not pending_masters:
@@ -730,7 +747,13 @@ class ToolExecutor:
                 },
             }
 
-        return {"ok": True, "count": len(results), "results": results}
+        return {
+            "ok": True,
+            "count": len(results),
+            "results": results,
+            "failures": failures,
+            "failed_count": len(failures),
+        }
 
     def _exec_refresh_staleness(self, params: dict) -> Any:
         newly_stale = self._require_workspace().refresh_staleness()
