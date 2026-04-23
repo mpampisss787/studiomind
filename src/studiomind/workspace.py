@@ -475,6 +475,7 @@ class WorkspaceSession:
     def _configure_export_dialog(
         self,
         desktop: Any,
+        dialog_hwnd: int,
         output_dir: Path,
         batch: bool = False,
     ) -> bool:
@@ -494,35 +495,13 @@ class WorkspaceSession:
 
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
-            # Find FL's export dialog — it's the child or owned window of FL's process.
-            # Get FL's process ID from the window we already have foreground.
-            fl_hwnd = user32.GetForegroundWindow()
-            fl_pid = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(fl_hwnd, ctypes.byref(fl_pid))
+            # The dialog is already in the foreground (modal, grabbed focus when opened).
+            # Confirm it's still foreground; if not, bring it up.
+            if user32.GetForegroundWindow() != dialog_hwnd:
+                user32.SetForegroundWindow(dialog_hwnd)
+                time.sleep(0.2)
 
-            # FL's export dialog is a top-level window owned by the same process.
-            dialog_hwnd = None
-            EnumWindowsProc = ctypes.WINFUNCTYPE(
-                ctypes.c_bool, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
-            )
-
-            def find_dialog(hwnd, _):
-                nonlocal dialog_hwnd
-                pid = ctypes.c_ulong()
-                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value == fl_pid.value and hwnd != fl_hwnd:
-                    if user32.IsWindowVisible(hwnd):
-                        dialog_hwnd = hwnd
-                        return False  # stop
-                return True
-
-            user32.EnumWindows(EnumWindowsProc(find_dialog), 0)
-
-            if dialog_hwnd is None:
-                logger.warning("Export dialog not found in FL's process")
-                return False
-
-            logger.info("Found export dialog hwnd=0x%x", dialog_hwnd)
+            logger.info("Configuring export dialog hwnd=0x%x", dialog_hwnd)
 
             # ── Strategy: clipboard paste for the path ────────────────
             path_str = str(output_dir).rstrip("\\") + "\\"
@@ -540,9 +519,7 @@ class WorkspaceSession:
             except Exception as clip_err:
                 logger.warning("Clipboard set failed: %s", clip_err)
 
-            # Focus the dialog and paste into the filename field
-            user32.SetForegroundWindow(dialog_hwnd)
-            time.sleep(0.2)
+            # Dialog already has focus — paste path directly into the filename field
             send_keys("^a")    # select all in filename field
             send_keys("^v")    # paste the path
             time.sleep(0.2)
@@ -673,17 +650,44 @@ class WorkspaceSession:
                 logger.warning("FL did not take foreground after AttachThreadInput — aborting auto-render")
                 return False, "Could not bring FL Studio to foreground — please export manually"
 
+            # Note the current foreground window before pressing Ctrl+R.
+            # FL's export dialog is MODAL — when it opens it grabs keyboard focus.
+            # So we just watch for the foreground window to change to a different
+            # FL window. That new foreground IS the export dialog.
+            initial_fg = user32.GetForegroundWindow()
+
             send_keys("^r")   # Ctrl+R now safely goes to FL
-            if self._interruptible_sleep(2.0, stop_event):
+
+            dialog_hwnd = None
+            for _ in range(30):   # up to 3 seconds, 100ms steps
+                if stop_event and stop_event.is_set():
+                    return False, "Stopped by user"
+                time.sleep(0.1)
+                current_fg = user32.GetForegroundWindow()
+                if current_fg != initial_fg and current_fg != 0:
+                    fg_pid = ctypes.c_ulong()
+                    user32.GetWindowThreadProcessId(current_fg, ctypes.byref(fg_pid))
+                    if fg_pid.value == fl_pid.value:
+                        dialog_hwnd = current_fg
+                        logger.info("Export dialog in foreground: hwnd=0x%x", dialog_hwnd)
+                        break
+
+            if dialog_hwnd is None:
+                logger.warning("Export dialog did not take foreground after Ctrl+R")
+                # Still try Enter as last resort
+                send_keys("{ENTER}")
+                return True, "Ctrl+R sent but dialog not detected — Enter pressed as fallback"
+
+            # Dialog has focus — give it a moment to fully render
+            if self._interruptible_sleep(0.3, stop_event):
                 return False, "Stopped by user"
 
             # Determine the output folder based on render type
             output_dir = self._project.stems_dir if batch else self._project.masters_dir
 
-            # Configure the dialog (set path, mode, click Start)
-            configured = self._configure_export_dialog(desktop, output_dir, batch=batch)
+            # Configure the dialog (set path, click Start)
+            configured = self._configure_export_dialog(desktop, dialog_hwnd, output_dir, batch=batch)
             if not configured:
-                # Last-ditch fallback: just press Enter with whatever is in the dialog
                 send_keys("{ENTER}")
 
             logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
