@@ -552,31 +552,50 @@ class WorkspaceSession:
             time.sleep(0.2)
             logger.info("Pasted export path: %s", path_str)
 
-            # ── Try win32 backend to find Start button ────────────────
-            started = False
-            try:
-                app = Application(backend="win32").connect(handle=dialog_hwnd)
-                dlg = app.window(handle=dialog_hwnd)
-                buttons = dlg.descendants(class_name="TButton")
-                for btn in buttons:
-                    name = (btn.window_text() or "").strip().lower()
-                    logger.debug("Dialog button: %r", name)
-                    if name in ("start", "ok", "export", "render"):
-                        btn.click()
-                        logger.info("Clicked Start button")
-                        started = True
-                        break
-            except Exception as e:
-                logger.debug("win32 button search failed: %s", e)
+            # ── Find and click Start via raw EnumChildWindows ─────────
+            # pywinauto's win32 backend misses FL's Delphi/VCL buttons.
+            # Use ctypes directly: enumerate every child window, log its
+            # class+text so we know what FL actually calls the button,
+            # then click it via BM_CLICK.
+            BM_CLICK  = 0x00F5
+            GW_CHILD  = 5
+            GW_HWNDNEXT = 2
 
-            if not started:
-                # Keyboard fallback: Tab to Start, press Space/Enter
-                # In FL's export dialog, Start is typically the first/default button
+            child_info: list[dict] = []
+            ChildEnumProc = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t
+            )
+
+            def _collect_child(hwnd, _):
+                cls  = ctypes.create_unicode_buffer(128)
+                text = ctypes.create_unicode_buffer(256)
+                user32.GetClassNameW(hwnd, cls,  128)
+                user32.GetWindowTextW(hwnd, text, 256)
+                child_info.append({"hwnd": hwnd, "cls": cls.value, "text": text.value})
+                return True   # continue enumerating
+
+            user32.EnumChildWindows(dialog_hwnd, ChildEnumProc(_collect_child), 0)
+
+            # Log everything so we know FL's actual control names
+            for c in child_info:
+                logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
+
+            # Click the button whose text matches Start / OK / Export / Render
+            start_synonyms = {"start", "ok", "export", "render", "s t a r t"}
+            clicked = False
+            for c in child_info:
+                if c["text"].strip().lower() in start_synonyms:
+                    user32.SendMessageW(c["hwnd"], BM_CLICK, 0, 0)
+                    logger.info("Clicked button: %r (cls=%s)", c["text"], c["cls"])
+                    clicked = True
+                    break
+
+            if not clicked:
+                # Last resort: press Enter — default button gets it
                 send_keys("{ENTER}")
-                logger.info("Sent Enter to confirm export dialog")
-                started = True
+                logger.info("Fallback: sent Enter to export dialog")
 
-            return started
+            return True
 
         except Exception as e:
             logger.warning("Dialog configuration failed: %s", e)
