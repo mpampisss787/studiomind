@@ -1323,10 +1323,18 @@ class WorkspaceSession:
             slug = slugify(rec.track_name or "") if rec.kind == KIND_STEM else "master"
             if not slug:
                 return None
+            # Require the track slug to match at a word boundary — either the
+            # whole filename slug equals the track slug, or it ends in
+            # "_<track_slug>". Plain substring matching let "koto_thing"
+            # collide with "koto_thing_2" because the latter contains the
+            # former. FL batch exports look like "<project>_<track>.wav",
+            # so the track slug is always the suffix.
+            target_suffix = "_" + slug
             for wav in candidates:
                 if wav in claimed_files:
                     continue
-                if slug in slugify(wav.stem):
+                wav_slug = slugify(wav.stem)
+                if wav_slug == slug or wav_slug.endswith(target_suffix):
                     return wav
             return None
 

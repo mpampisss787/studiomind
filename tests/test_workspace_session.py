@@ -249,6 +249,48 @@ def test_watcher_fuzzy_matches_fl_batch_export_names(tmp_path: Path):
         sess.stop()
 
 
+def test_watcher_respects_slug_word_boundary(tmp_path: Path):
+    """
+    Regression for the koto bug 2026-04-24: a track named 'koto thing' (slug
+    'koto_thing') was matching an FL batch-export file for a different track
+    'koto thing #2' (slug 'koto_thing_2') because the match was a raw substring
+    — 'koto_thing' appears inside 'koto_koto_thing_2'.
+
+    The fix: match only at word boundaries (whole equal or ends with '_<slug>'),
+    mirroring FL's "<project>_<track>.wav" naming convention.
+    """
+    fl = FakeFL()
+    fl.tracks[14] = {"index": 14, "name": "koto thing", "volume": 0.78, "plugins": []}
+    fl.tracks[15] = {"index": 15, "name": "koto thing #2", "volume": 0.78, "plugins": []}
+    project = open_project("koto", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    sess.prepare_batch_render(include_master=False)
+    sess.start()
+    try:
+        # FL batch export writes files named "<project>_<track>.wav". The two
+        # candidates here are the exact pattern that broke in the koto log:
+        # "koto_thing_2" is a strict superset substring of "koto_thing".
+        _write_fake_wav(project.stems_dir / "koto_koto thing.wav")
+        _write_fake_wav(project.stems_dir / "koto_koto thing #2.wav")
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if (
+                sess.manifest.stems[14].status == STATUS_READY
+                and sess.manifest.stems[15].status == STATUS_READY
+            ):
+                break
+            time.sleep(0.2)
+
+        assert sess.manifest.stems[14].filename == "koto_koto thing.wav", (
+            f"track 14 'koto thing' must bind to its own file, not track 15's #2"
+        )
+        assert sess.manifest.stems[15].filename == "koto_koto thing #2.wav"
+    finally:
+        sess.stop()
+
+
 def test_watcher_prefers_specific_over_generic_slug(tmp_path: Path):
     """With both 'Bass' and 'Sub Bass' tracks, a file named 'Sub Bass.wav' binds to Sub Bass."""
     fl = FakeFL()
