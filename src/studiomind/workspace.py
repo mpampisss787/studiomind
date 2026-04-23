@@ -941,6 +941,12 @@ class WorkspaceSession:
             fl_state_hash=state_hash,
         )
         with self._lock:
+            # Drop any existing pending masters so they don't all try to claim
+            # the same file during a batch render. Keep READY/STALE entries
+            # (history is useful for master comparison).
+            self._manifest.masters = [
+                m for m in self._manifest.masters if m.status != STATUS_PENDING
+            ]
             self._manifest.masters.append(rec)
             self._project.save_manifest(self._manifest)
 
@@ -1154,7 +1160,20 @@ class WorkspaceSession:
             return self._analyze_fn(path)
         from studiomind.analyzer.spectral import analyze_audio
 
-        return analyze_audio(path).to_dict()
+        # File-lock retry: FL may still hold the WAV open right after the
+        # batch export finishes. Retry a few times before giving up.
+        last_err: Exception | None = None
+        for attempt in range(4):
+            try:
+                return analyze_audio(path).to_dict()
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "system error" in msg or "permission" in msg or "being used" in msg:
+                    time.sleep(0.5 + attempt * 0.5)  # 0.5, 1.0, 1.5, 2.0 = 5s total
+                    continue
+                raise
+        raise last_err if last_err else RuntimeError("analyze_audio failed")
 
     def _watch_loop(self) -> None:
         """Background poller: mark pending entries READY when their file lands and is stable."""
@@ -1165,14 +1184,17 @@ class WorkspaceSession:
                 logger.exception("Watcher poll error: %s", e)
             self._watcher_stop.wait(self.WATCH_INTERVAL_S)
 
-    # Pattern FL uses for the master track in a batch export:
-    # "ProjectName - Master.wav" or "ProjectName_Master.wav"
-    _MASTER_SLUG_HINTS = frozenset({"master", "main", "mixdown", "mix"})
-
     def _is_fl_batch_master(self, filename: str) -> bool:
-        """Return True if this filename looks like FL's auto-named master from a batch export."""
+        """
+        Return True ONLY if this filename is FL's auto-named master for a batch
+        export. FL generates '<project>_Master.wav' (the Master track, index 0).
+
+        Strict match: slug must END with '_master' (or equal 'master'). This avoids
+        matching bus stems like 'Drums ► Mix', 'PreMaster MS', 'Kick ► Mix' etc.
+        which contain 'mix' or 'master' in their names but are stems, not the master.
+        """
         stem_slug = slugify(Path(filename).stem)
-        return any(hint in stem_slug for hint in self._MASTER_SLUG_HINTS)
+        return stem_slug == "master" or stem_slug.endswith("_master")
 
     def _adopt_batch_master(self, wav_path: Path) -> None:
         """
