@@ -113,6 +113,56 @@ StudioMind tries to trigger FL's export automatically (via pywinauto: focus FL �
 - De-ess: bell, 6 kHz, -4 dB, Q=3.0
 - Air shelf: high_shelf, 10 kHz, +1.5 dB
 
+### Compression
+
+When `read_mixer_track` shows Fruity Compressor / Fruity Limiter / a similar dynamics plugin, you can shape it via `set_plugin_param`. Typed wrappers for these plugins are planned (see `docs/phase-2-effects.md`) but until those ship, use the generic tool and cite the param by its advertised name from the `read_mixer_track` response.
+
+**Typical starting values** (each an "it depends" — adjust after listening):
+
+| Source | Threshold | Ratio | Attack | Release | Gain |
+|--------|-----------|-------|--------|---------|------|
+| Vocals | -18 dB | 3:1 | 5-10 ms | 80-150 ms | +2-4 dB |
+| Bass | -14 dB | 4:1 | 10-20 ms | 100-200 ms | +2 dB |
+| Kick | -10 dB | 4:1 | 10-15 ms | 100 ms | 0-+2 dB |
+| Snare | -12 dB | 4:1 | 2-5 ms | 50-80 ms | +2-4 dB |
+| Drum bus | -10 dB | 2-3:1 | 10 ms | 80 ms | +1 dB |
+| Master bus | -8 dB | 2:1 | 20-30 ms | 100-200 ms | 0 dB |
+
+Signs of over-compression: lifeless transients, pumping audible in the spectral_balance shifts, RMS too close to LUFS (dynamic range below ~8 dB).
+
+Signs of under-compression: transient peaks 10+ dB above RMS on a source that should sit steadily in the mix.
+
+### Reverb
+
+When Fruity Reeverb 2 or similar is on a track (or better, on an aux send):
+
+- **Short room** (drums, percussion): size 0.2-0.3, decay 0.5-1.0s, high-damp 6 kHz, wet -12 dB
+- **Vocal plate** (lead vocal): size 0.4-0.5, decay 1.5-2.0s, wet -14 dB, pre-delay 40-60 ms
+- **Ambient pad** (background): size 0.7-0.9, decay 3-5s, wet -10 dB, low-cut 200 Hz
+
+If reverb is on an insert (not a send), **wet** typically stays below 25% to preserve dry signal. On a send, wet is 100% and the return fader controls balance.
+
+Always high-pass the send feed below 150-200 Hz — reverb on low frequencies muddies everything.
+
+### Sidechain (kick → bass/synth duck)
+
+FL's native sidechain pattern: route the key-source track's mixer output as a send to the target track, then on the target track load Fruity Limiter (comp mode) or Fruity Compressor and set the side-chain input to that send slot.
+
+Depth of duck (how much the bass drops on the kick hit):
+- Subtle groove: -3 to -5 dB
+- Obvious pump (house/trap): -6 to -10 dB
+- Heavy (EDM drops): -12 dB+
+
+Release time controls the pump's shape — short release (50-100 ms) = snappy; long release (200-400 ms) = smoother, more "breathing."
+
+If sidechain isn't routed, the user has to wire it in FL first. You can **detect** that it's missing (target track has no send-in on a likely source slot), but you can't **create** the routing from the API yet.
+
+### Stereo width
+
+Stock options: Fruity Stereo Enhancer, Fruity Mono. Rule of thumb: keep sub bass (< 120 Hz) centered/mono; widen mid-air elements (pads, stereo synth layers, reverb returns). Over-widening mids causes phase issues on mono playback.
+
+Check a rendered stem's balance: if `sub` is hot but the stereo_width meter (not yet exposed in analysis — future work) shows significant side content in that band, that's a mix risk.
+
 ## Communication style
 
 - Concise. Technical but accessible.
