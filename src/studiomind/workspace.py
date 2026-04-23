@@ -49,17 +49,17 @@ def slugify(name: str) -> str:
     return s.strip("_") or "unnamed"
 
 
-def project_name_from_fl_path(fl_path: str | None) -> str:
-    """Derive a project name from FL's current project path. Empty -> 'untitled'.
+def project_name_from_fl_path(fl_path: str | None) -> str | None:
+    """Derive a project name from FL's current project path. Empty/None -> None.
 
     Handles both POSIX and Windows separators since the caller may be parsing a
     path produced on a different OS than the one running this code.
     """
     if not fl_path:
-        return "untitled"
+        return None
     basename = fl_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
     stem = basename.rsplit(".", 1)[0] if "." in basename else basename
-    return stem or "untitled"
+    return stem or None
 
 
 def hash_state(state: Any) -> str:

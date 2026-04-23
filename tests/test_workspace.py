@@ -31,8 +31,9 @@ def test_slugify_common_cases():
 
 
 def test_project_name_from_fl_path():
-    assert project_name_from_fl_path(None) == "untitled"
-    assert project_name_from_fl_path("") == "untitled"
+    # None / empty → None so callers can chain with `or` fallbacks
+    assert project_name_from_fl_path(None) is None
+    assert project_name_from_fl_path("") is None
     assert project_name_from_fl_path(r"C:\Users\x\My Track v3.flp") == "My Track v3"
     assert project_name_from_fl_path("/home/x/demo.flp") == "demo"
 
