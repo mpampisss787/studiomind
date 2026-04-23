@@ -214,7 +214,20 @@ async def workspace_status():
         else []
     )
 
-    return {
+    # Sanitize any legacy -inf/nan values in existing analysis dicts so JSON
+    # encoding doesn't explode on records written before the analyzer had a
+    # floor at -120. Walks nested dicts; scalars only.
+    import math as _math
+    def _sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize(v) for v in obj]
+        if isinstance(obj, float) and not _math.isfinite(obj):
+            return -120.0
+        return obj
+
+    return _sanitize({
         "active": True,
         "project_name": project.name,
         "root": str(project.root),
@@ -225,7 +238,7 @@ async def workspace_status():
         "stems": stems,
         "masters": masters,
         "references": references,
-    }
+    })
 
 
 @app.post("/api/workspace/reference")

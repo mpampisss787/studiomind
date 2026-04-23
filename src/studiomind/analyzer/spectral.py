@@ -39,16 +39,25 @@ class AudioAnalysis:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
+        # Silent or near-silent audio produces -inf in dB values (log10(0)).
+        # JSON can't encode inf/nan, so floor everything at -120 dB.
+        import math
+
+        def _safe(v: float, floor: float = -120.0) -> float:
+            if v is None or not math.isfinite(v):
+                return floor
+            return round(v, 1)
+
         return {
             "path": self.path,
             "sample_rate": self.sample_rate,
             "duration_s": round(self.duration_s, 2),
             "channels": self.channels,
-            "lufs": round(self.lufs, 1),
-            "true_peak_db": round(self.true_peak_db, 1),
-            "spectral_centroid_hz": round(self.spectral_centroid_hz, 0),
-            "spectral_balance": {k: round(v, 1) for k, v in self.spectral_balance.items()},
-            "rms_db": round(self.rms_db, 1),
+            "lufs": _safe(self.lufs),
+            "true_peak_db": _safe(self.true_peak_db),
+            "spectral_centroid_hz": _safe(self.spectral_centroid_hz, floor=0.0),
+            "spectral_balance": {k: _safe(v) for k, v in self.spectral_balance.items()},
+            "rms_db": _safe(self.rms_db),
         }
 
 
