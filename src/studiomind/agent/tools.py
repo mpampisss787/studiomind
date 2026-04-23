@@ -667,6 +667,12 @@ class ToolExecutor:
             stop_event=self._stop_event,
         )
 
+    # First auto-render of a session frequently produces unreadable WAVs for a
+    # handful of tracks (FL still holding file handles / mid-overwrite). A single
+    # retry 10s later almost always succeeds. Retrying more aggressively just
+    # thrashes; retrying more than once rarely helps.
+    _RETRY_DELAY_S = 10.0
+
     def _exec_collect_all_renders(self, params: dict) -> Any:
         """Wait for every pending render in the workspace, analyze them all, return as a list."""
         import time as _time
@@ -678,9 +684,52 @@ class ToolExecutor:
         results: list[dict] = []
         failures: list[dict] = []
         collected_ids: set[tuple[str, object]] = set()
+        # key -> {"retry_at": float, "kind": "stem"|"master", "data": dict, "first_error": str}
+        pending_retries: dict[tuple[str, object], dict] = {}
+
+        def _try_collect(kind: str, key_value: object, call_kwargs: dict, data: dict) -> None:
+            """Attempt one collect; on failure, schedule a retry or finalize as failure."""
+            key = (kind, key_value)
+            try:
+                r = workspace.collect(
+                    timeout_s=5.0,
+                    stop_event=self._stop_event,
+                    **call_kwargs,
+                )
+                results.append(r)
+                collected_ids.add(key)
+                pending_retries.pop(key, None)
+            except Exception as e:
+                if key in pending_retries:
+                    # Second failure — give up on this one.
+                    failures.append({
+                        **({"track_id": key_value} if kind == "stem" else {"filename": key_value}),
+                        "filename": data.get("filename") if kind == "stem" else key_value,
+                        "error": str(e),
+                        "first_error": pending_retries[key]["first_error"],
+                        "attempts": 2,
+                    })
+                    collected_ids.add(key)
+                    pending_retries.pop(key, None)
+                else:
+                    pending_retries[key] = {
+                        "retry_at": _time.monotonic() + self._RETRY_DELAY_S,
+                        "kind": kind,
+                        "data": data,
+                        "first_error": str(e),
+                    }
 
         while _time.monotonic() < deadline:
             if self._stop_event.is_set():
+                # Anything still in pending_retries becomes a failure on stop.
+                for key, info in pending_retries.items():
+                    kind, key_value = key
+                    failures.append({
+                        **({"track_id": key_value} if kind == "stem" else {"filename": key_value}),
+                        "error": info["first_error"],
+                        "attempts": 1,
+                        "note": "pending retry at stop",
+                    })
                 return {
                     "ok": False,
                     "error": "stopped",
@@ -689,6 +738,7 @@ class ToolExecutor:
                     "failures": failures,
                     "failed_count": len(failures),
                 }
+
             status = workspace.status()
             pending_stems = [s for s in status["stems"] if s["status"] == "pending"]
             pending_masters = [m for m in status["masters"] if m["status"] == "pending"]
@@ -701,43 +751,39 @@ class ToolExecutor:
                 if m["status"] == "ready" and ("master", m["filename"]) not in collected_ids
             ]
 
+            # Retries whose cooldown has elapsed. Iterate over a snapshot because
+            # _try_collect mutates pending_retries.
+            now = _time.monotonic()
+            retry_now = [
+                (key, info) for key, info in list(pending_retries.items())
+                if now >= info["retry_at"]
+            ]
+            for key, info in retry_now:
+                kind, key_value = key
+                if kind == "stem":
+                    _try_collect("stem", key_value, {"track_id": key_value}, info["data"])
+                else:
+                    _try_collect("master", key_value, {"filename": key_value}, info["data"])
+
             for s in ready_stems:
-                try:
-                    r = workspace.collect(
-                        track_id=s["track_id"],
-                        timeout_s=5.0,
-                        stop_event=self._stop_event,
-                    )
-                    results.append(r)
-                except Exception as e:
-                    # Broken file (corrupt WAV, permission error, etc.) -
-                    # skip this stem and keep collecting the rest.
-                    failures.append({
-                        "track_id": s["track_id"],
-                        "filename": s.get("filename"),
-                        "error": str(e),
-                    })
-                collected_ids.add(("stem", s["track_id"]))
+                _try_collect("stem", s["track_id"], {"track_id": s["track_id"]}, s)
 
             for m in ready_masters:
-                try:
-                    r = workspace.collect(
-                        filename=m["filename"],
-                        timeout_s=5.0,
-                        stop_event=self._stop_event,
-                    )
-                    results.append(r)
-                except Exception as e:
-                    failures.append({
-                        "filename": m["filename"],
-                        "error": str(e),
-                    })
-                collected_ids.add(("master", m["filename"]))
+                _try_collect("master", m["filename"], {"filename": m["filename"]}, m)
 
-            if not pending_stems and not pending_masters:
+            if not pending_stems and not pending_masters and not pending_retries:
                 break
             _time.sleep(0.5)
         else:
+            # Timeout: pending retries become failures.
+            for key, info in pending_retries.items():
+                kind, key_value = key
+                failures.append({
+                    **({"track_id": key_value} if kind == "stem" else {"filename": key_value}),
+                    "error": info["first_error"],
+                    "attempts": 1,
+                    "note": "pending retry at timeout",
+                })
             return {
                 "ok": False,
                 "error": "timeout",

@@ -24,11 +24,19 @@ class AudioAnalysis:
     spectral_centroid_hz: float
     spectral_balance: dict[str, float]  # sub/low/mid/high/presence/air in dB
     rms_db: float
+    # "ok" = has audible content, "silent" = readable but near-zero energy
+    # (intentional silence, muted stem, or a stem that simply doesn't play in
+    # this section). "broken" is not reachable here — unreadable files raise in
+    # analyze_audio and are handled as failures upstream.
+    status: str = "ok"
 
     def summary(self) -> str:
         """Human-readable summary for the agent."""
+        header = f"Audio: {Path(self.path).name}"
+        if self.status == "silent":
+            header += "  [silent — no audible content]"
         lines = [
-            f"Audio: {Path(self.path).name}",
+            header,
             f"  Duration: {self.duration_s:.1f}s, {self.sample_rate}Hz, {self.channels}ch",
             f"  LUFS: {self.lufs:.1f}, True Peak: {self.true_peak_db:.1f} dB, RMS: {self.rms_db:.1f} dB",
             f"  Spectral centroid: {self.spectral_centroid_hz:.0f} Hz",
@@ -58,6 +66,7 @@ class AudioAnalysis:
             "spectral_centroid_hz": _safe(self.spectral_centroid_hz, floor=0.0),
             "spectral_balance": {k: _safe(v) for k, v in self.spectral_balance.items()},
             "rms_db": _safe(self.rms_db),
+            "status": self.status,
         }
 
 
@@ -128,6 +137,11 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
         else:
             spectral_balance[band_name] = -120.0
 
+    # -60 dBFS RMS is ~0.001 linear — well below "quiet audible content" and
+    # reliably distinguishes a muted/silent stem from one that just happens to
+    # be quiet in this section.
+    status = "silent" if (not np.isfinite(rms_db) or rms_db < -60.0) else "ok"
+
     return AudioAnalysis(
         path=str(path),
         sample_rate=sr,
@@ -138,6 +152,7 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
         spectral_centroid_hz=spectral_centroid,
         spectral_balance=spectral_balance,
         rms_db=rms_db,
+        status=status,
     )
 
 

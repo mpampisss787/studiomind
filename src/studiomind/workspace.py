@@ -479,6 +479,7 @@ class WorkspaceSession:
         dialog_hwnd: int,
         output_dir: Path,
         batch: bool = False,
+        stop_event: threading.Event | None = None,
     ) -> bool:
         """
         Type the output path into the Save As dialog and press Enter/Save.
@@ -546,14 +547,17 @@ class WorkspaceSession:
             if not already_correct_folder:
                 # Select all in filename field, type full path, Enter to navigate
                 send_keys("^a")
-                time.sleep(0.05)
+                if self._interruptible_sleep(0.05, stop_event):
+                    return False
                 # Escape special chars for send_keys: (){}[]+^%~
                 # Paths contain none of these typically, but backslash is safe
                 send_keys(path_str, with_spaces=True, pause=0.005)
                 print(f"[AutoRender] Typed path into filename field", flush=True)
-                time.sleep(0.1)
+                if self._interruptible_sleep(0.1, stop_event):
+                    return False
                 send_keys("{ENTER}")          # navigate to folder
-                time.sleep(0.8)                # wait for navigation
+                if self._interruptible_sleep(0.8, stop_event):
+                    return False
                 print("[AutoRender] Navigated via Enter", flush=True)
 
             # Now click Save by pressing Enter again (default button is Save)
@@ -695,10 +699,12 @@ class WorkspaceSession:
                 print(f"[AutoRender] Stale dialog open (0x{fg_now:x}) — dismissing", flush=True)
                 logger.info("Stale dialog detected, dismissing with Escape")
                 send_keys("{ESCAPE}")
-                time.sleep(0.5)
+                if self._interruptible_sleep(0.5, stop_event):
+                    return False, "Stopped by user"
                 # Re-focus FL for the Ctrl+R
                 user32.SetForegroundWindow(hwnd)
-                time.sleep(0.3)
+                if self._interruptible_sleep(0.3, stop_event):
+                    return False, "Stopped by user"
 
             print("[AutoRender] Pressing Ctrl+R to open export dialog", flush=True)
             send_keys("^r")
@@ -724,7 +730,11 @@ class WorkspaceSession:
             # Determine the output folder based on render type
             output_dir = self._project.stems_dir if batch else self._project.masters_dir
 
-            configured = self._configure_export_dialog(desktop, dialog_hwnd, output_dir, batch=batch)
+            configured = self._configure_export_dialog(
+                desktop, dialog_hwnd, output_dir, batch=batch, stop_event=stop_event
+            )
+            if stop_event and stop_event.is_set():
+                return False, "Stopped by user"
             if not configured:
                 print("[AutoRender] Dialog config failed — sending Enter", flush=True)
                 send_keys("{ENTER}")
@@ -743,7 +753,8 @@ class WorkspaceSession:
             # Send Enter — confirms the Start button in FL's settings dialog if open
             print("[AutoRender] STAGE 2: Sending Enter to click Start (default button)", flush=True)
             send_keys("{ENTER}")
-            time.sleep(0.3)
+            if self._interruptible_sleep(0.3, stop_event):
+                return True, "Save As closed, but stopped before stage-2 confirm"
             # Belt-and-suspenders: send Enter a second time in case there's any
             # additional confirmation dialog (e.g., "overwrite existing file?")
             send_keys("{ENTER}")
