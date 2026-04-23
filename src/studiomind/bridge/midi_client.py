@@ -26,9 +26,19 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Port name patterns to search for
-DEFAULT_INPUT_PORT = "StudioMind"  # FL sends responses here
-DEFAULT_OUTPUT_PORT = "StudioMind"  # We send commands here
+# Port name patterns to search for.
+#
+# On Microsoft MIDI Services Basic MIDI 1.0 Loopback, the default endpoints
+# are "Default App Loopback (A)" and "Default App Loopback (B)", cross-wired
+# so that writes to (A) are readable at (B) and vice versa. The companion
+# uses endpoint (A) for both its MidiOut and MidiIn; FL Studio attaches to
+# endpoint (B) for both its Input and Output in MIDI Settings.
+#
+# Override via STUDIOMIND_MIDI_IN / STUDIOMIND_MIDI_OUT env vars if you've
+# renamed the endpoints or set up a different transport (e.g. loopMIDI).
+import os as _os
+DEFAULT_INPUT_PORT = _os.environ.get("STUDIOMIND_MIDI_IN", "Default App Loopback (A)")
+DEFAULT_OUTPUT_PORT = _os.environ.get("STUDIOMIND_MIDI_OUT", "Default App Loopback (A)")
 
 
 def find_port(api: rtmidi.MidiIn | rtmidi.MidiOut, pattern: str) -> int | None:
