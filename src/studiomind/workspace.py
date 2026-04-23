@@ -525,26 +525,22 @@ class WorkspaceSession:
             logger.info("Found export dialog hwnd=0x%x", dialog_hwnd)
 
             # ── Strategy: clipboard paste for the path ────────────────
-            # UIA/win32 control discovery is unreliable for VCL dialogs.
-            # Instead: copy the output path to clipboard, click into the filename
-            # area (top of dialog), select-all, paste. FL's filename field accepts
-            # full folder paths — it will navigate to the folder.
             path_str = str(output_dir).rstrip("\\") + "\\"
 
-            # Set clipboard via Win32 (no external dep)
-            if user32.OpenClipboard(0):
-                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-                user32.EmptyClipboard()
-                data = (path_str + "\x00").encode("utf-16-le")
-                hmem = kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE|GMEM_ZEROINIT
-                ptr = kernel32.GlobalLock(hmem)
-                ctypes.memmove(ptr, data, len(data))
-                kernel32.GlobalUnlock(hmem)
-                CF_UNICODETEXT = 13
-                user32.SetClipboardData(CF_UNICODETEXT, hmem)
-                user32.CloseClipboard()
+            # Use PowerShell Set-Clipboard — avoids Win32 GlobalAlloc pointer
+            # management which caused an access violation on null GlobalLock return.
+            try:
+                import subprocess as _sp
+                _sp.run(
+                    ["powershell", "-Command", f"Set-Clipboard -Value '{path_str}'"],
+                    capture_output=True,
+                    timeout=5,
+                )
+                logger.info("Set clipboard: %s", path_str)
+            except Exception as clip_err:
+                logger.warning("Clipboard set failed: %s", clip_err)
 
-            # Focus the dialog and paste path into the filename field
+            # Focus the dialog and paste into the filename field
             user32.SetForegroundWindow(dialog_hwnd)
             time.sleep(0.2)
             send_keys("^a")    # select all in filename field
