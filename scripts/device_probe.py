@@ -2,34 +2,26 @@
 # url=https://github.com/anchinous/studiomind
 # supportedDevices=StudioMindProbe
 
-"""
-One-shot diagnostic script to test what FL Studio's embedded Python can actually do.
-
-Purpose: verify whether FL's Python sandbox allows sockets, filesystem, ctypes,
-and named pipes. Determines whether the SysEx-over-MIDI transport can be replaced
-with a driver-free IPC mechanism.
-
-USAGE:
-    1. Drop this file in:
-       FL Studio\\Settings\\Hardware\\StudioMindProbe\\device_probe.py
-    2. FL Studio → Options → MIDI Settings → Controller type: "StudioMind Sandbox Probe"
-       (enable it — "input" checkbox ticked is fine, no actual MIDI needed)
-    3. Open View → Script output (or check the hint bar)
-    4. The probe runs automatically on script load (OnInit).
-    5. Results are written to %TEMP%\\studiomind_probe.log AND printed to FL's
-       script output window.
-    6. Share the log file contents back.
-
-The script is non-destructive — it only reads, tries imports, and attempts to
-open/bind. If anything fails, it's caught and logged, FL keeps running.
-"""
+# One-shot diagnostic script to test what FL Studio's embedded Python allows.
+# Purpose: verify whether FL's Python sandbox permits sockets, filesystem,
+# ctypes, and named pipes, to determine if the SysEx-over-MIDI transport can
+# be replaced with a driver-free IPC mechanism.
+#
+# USAGE:
+#   1. Drop this file in:
+#      FL Studio\Settings\Hardware\StudioMindProbe\device_probe.py
+#   2. FL Studio -> Options -> MIDI Settings -> set Controller type to
+#      "StudioMind Sandbox Probe" on some Input row and tick Enable.
+#   3. Open View -> Script output (or check the hint bar).
+#   4. The probe runs automatically on script load (OnInit).
+#   5. Results are written to %TEMP%\studiomind_probe.log AND printed to FL's
+#      Script output window.
 
 import os
 import sys
 import time
 import traceback
 
-# All probes write here; also collected for FL's script output
 _results = []
 
 
@@ -42,7 +34,6 @@ def _log(line):
 
 
 def _probe(name, fn):
-    """Run a probe function, capture success/failure with detail."""
     _log("")
     _log("[PROBE] " + name)
     try:
@@ -56,10 +47,6 @@ def _probe(name, fn):
             _log("    " + line)
         return False
 
-
-# ═══════════════════════════════════════════════════════════════════
-# PROBES
-# ═══════════════════════════════════════════════════════════════════
 
 def probe_python_info():
     return "python " + sys.version + " | platform=" + sys.platform + " | exe=" + sys.executable
@@ -101,12 +88,11 @@ def probe_write_file():
 
 
 def probe_tcp_bind():
-    """Try binding a TCP socket on localhost. Non-blocking quick test."""
     import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        s.bind(("127.0.0.1", 0))  # port 0 = let OS pick
+        s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
         s.listen(1)
         return "bound on 127.0.0.1:" + str(port) + " (listen OK)"
@@ -115,7 +101,6 @@ def probe_tcp_bind():
 
 
 def probe_named_pipe_create():
-    """Create a named pipe via ctypes kernel32.CreateNamedPipeW."""
     import ctypes
     from ctypes import wintypes
 
@@ -138,41 +123,30 @@ def probe_named_pipe_create():
         pipe_name,
         PIPE_ACCESS_DUPLEX,
         PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1,       # max instances
-        4096,    # out buffer
-        4096,    # in buffer
-        0,       # default timeout
-        None,    # default security
+        1, 4096, 4096, 0, None,
     )
-
     if handle == INVALID_HANDLE_VALUE or handle is None:
         err = kernel32.GetLastError()
         raise RuntimeError("CreateNamedPipeW failed, GetLastError=" + str(err))
-
-    # Immediately close — we only wanted to confirm creation is allowed.
     kernel32.CloseHandle(handle)
     return "pipe created and closed: " + pipe_name
 
 
 def probe_fl_modules():
-    import device
+    import device  # noqa: F401
     import general
     import ui
     return "FL modules OK | api=" + str(general.getVersion()) + " fl=" + str(ui.getVersion())
 
 
-# ═══════════════════════════════════════════════════════════════════
-# FL CALLBACKS
-# ═══════════════════════════════════════════════════════════════════
-
 def _run_all_probes():
-    _log("═" * 60)
+    _log("=" * 60)
     _log("StudioMind Sandbox Probe")
     _log("ts=" + str(time.time()))
-    _log("═" * 60)
+    _log("=" * 60)
 
     _probe("python_info", probe_python_info)
-    _probe("import os",   probe_import_os)
+    _probe("import os", probe_import_os)
     _probe("import threading", probe_import_threading)
     _probe("import socket", probe_import_socket)
     _probe("import ctypes", probe_import_ctypes)
@@ -183,17 +157,15 @@ def _run_all_probes():
     _probe("FL API modules", probe_fl_modules)
 
     _log("")
-    _log("═" * 60)
+    _log("=" * 60)
     _log("DONE.")
-    _log("═" * 60)
+    _log("=" * 60)
 
-    # Persist results so they survive FL restart / script reload.
     try:
         import tempfile
         log_path = os.path.join(tempfile.gettempdir(), "studiomind_probe.log")
         with open(log_path, "w") as f:
             f.write("\n".join(_results))
-        # Show where the log landed
         try:
             import ui
             ui.setHintMsg("StudioMind probe: " + log_path)
