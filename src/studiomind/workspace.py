@@ -526,28 +526,32 @@ class WorkspaceSession:
                     filename_edit = c["hwnd"]
                     break
 
-            if filename_edit:
+            # Check current folder by looking at the address bar text.
+            # If it already ends with our target folder name, skip path setting.
+            target_folder_name = Path(path_str.rstrip("\\")).name.lower()
+            already_correct_folder = False
+            for c in child_info:
+                if "address:" in c["text"].lower():
+                    current_folder = c["text"].lower()
+                    if current_folder.rstrip("\\").endswith(target_folder_name):
+                        already_correct_folder = True
+                        print(f"[AutoRender] Already in correct folder — skipping path set", flush=True)
+                    break
+
+            if not already_correct_folder and filename_edit:
                 WM_KEYDOWN = 0x0100
                 WM_KEYUP   = 0x0101
                 VK_RETURN  = 0x0D
 
-                # Set the folder path in the filename field
                 user32.SendMessageW(filename_edit, WM_SETTEXT, 0, path_str)
-                print(f"[AutoRender] Set filename field (0x{filename_edit:x}): {path_str}", flush=True)
-                logger.info("Set filename edit 0x%x to %s", filename_edit, path_str)
-
-                # Send Enter to the Edit to trigger "navigate to this folder"
+                print(f"[AutoRender] Set filename field: {path_str}", flush=True)
                 user32.SendMessageW(filename_edit, WM_KEYDOWN, VK_RETURN, 0)
                 user32.SendMessageW(filename_edit, WM_KEYUP,   VK_RETURN, 0)
-                time.sleep(0.6)   # wait for folder navigation to complete
-                print("[AutoRender] Navigated to stems folder — now clicking Save", flush=True)
-            else:
-                print("[AutoRender] No Edit control found — cannot set path", flush=True)
-                logger.warning("No Edit control in Save As dialog")
+                time.sleep(0.6)
+                print("[AutoRender] Navigated to stems folder", flush=True)
 
             # ── Click &Save ────────────────────────────────────────────
-            # After navigation the dialog is in the stems/ folder.
-            # Clicking &Save now exports with FL's auto-generated filename.
+            # FL auto-generates the filename for batch exports.
             save_synonyms = {"&save", "save", "&open", "start", "ok"}
             for c in child_info:
                 if c["text"].strip().lower() in save_synonyms and c["cls"].lower() == "button":
@@ -556,11 +560,11 @@ class WorkspaceSession:
                     logger.info("Clicked %r", c["text"])
                     return True
 
-            # Fallback: press Enter
+            # Fallback: Alt+S (keyboard shortcut for &Save)
             from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
-            send_keys("{ENTER}")
-            print("[AutoRender] No Save button found — sent Enter as fallback", flush=True)
-            logger.info("Sent Enter fallback")
+            send_keys("%s")  # Alt+S
+            print("[AutoRender] No Save button found — sent Alt+S shortcut", flush=True)
+            logger.info("Sent Alt+S fallback")
             return True
 
         except Exception as e:
