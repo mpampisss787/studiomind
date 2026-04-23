@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,10 @@ from studiomind.config import (
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# One active agent session at a time. The Stop endpoint uses this to signal
+# the running agent without touching the WebSocket.
+_active_stop_event: threading.Event | None = None
 
 app = FastAPI(title="StudioMind")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -72,6 +77,15 @@ async def get_settings() -> SettingsResponse:
         model_source=model_source(),
         available_models=AVAILABLE_MODELS,
     )
+
+
+@app.post("/api/stop")
+async def stop_agent():
+    """Signal the currently running agent to stop at its next check point."""
+    global _active_stop_event
+    if _active_stop_event:
+        _active_stop_event.set()
+    return {"ok": True}
 
 
 @app.post("/api/settings")
@@ -398,6 +412,10 @@ async def websocket_chat(ws: WebSocket):
         await ws.close()
         return
 
+    # Register this session's stop event so POST /api/stop can reach it
+    global _active_stop_event
+    _active_stop_event = agent._stop_event
+
     first_message = True
 
     try:
@@ -422,39 +440,16 @@ async def websocket_chat(ws: WebSocket):
 
                 agent_task = asyncio.create_task(run_agent())
 
-                # Concurrently: drain the agent's event queue and watch for a stop message
-                async def pump_queue():
-                    while True:
-                        msg = await queue.get()
-                        await ws.send_json(msg)
-                        if msg["type"] == "done":
-                            return
+                # Drain the agent's event queue to the client. Stop signals arrive
+                # via POST /api/stop (not via WebSocket), so there is no concurrent
+                # ws.receive_json() here — that was the source of connection drops.
+                while True:
+                    msg = await queue.get()
+                    await ws.send_json(msg)
+                    if msg["type"] == "done":
+                        break
 
-                async def watch_for_stop():
-                    """While the agent runs, read further WS frames. A 'stop' frame
-                    signals cancellation; anything else we just ignore (the UI
-                    shouldn't be sending new messages mid-turn)."""
-                    while True:
-                        frame = await ws.receive_json()
-                        if frame.get("type") == "stop":
-                            agent.request_stop()
-                            await queue.put({"type": "stopping", "content": "Stopping..."})
-                            return
-
-                pump_task = asyncio.create_task(pump_queue())
-                stop_task = asyncio.create_task(watch_for_stop())
-
-                done, pending = await asyncio.wait(
-                    {pump_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                # Whichever task didn't finish, cancel it
-                for t in pending:
-                    t.cancel()
-                # Let the agent wrap up naturally so the conversation history stays consistent
-                try:
-                    await agent_task
-                except Exception:
-                    pass
+                await agent_task
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
