@@ -219,6 +219,104 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Sidebar collapse toggle */
+    .sidebar-toggle {
+      position: absolute;
+      top: 14px;
+      left: -12px;
+      width: 22px;
+      height: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 5;
+      transition: background 0.15s;
+    }
+    .sidebar-toggle:hover { background: var(--surface-hover); }
+    .sidebar-toggle svg { width: 10px; height: 10px; color: var(--text-muted); transition: transform 0.25s; }
+    .sidebar.collapsed .sidebar-toggle svg { transform: rotate(180deg); }
+
+    body.sidebar-collapsed {
+      grid-template-columns: 1fr 38px;
+    }
+    .sidebar.collapsed {
+      padding: 14px 6px;
+      overflow: hidden;
+    }
+    .sidebar.collapsed > *:not(.sidebar-toggle):not(.sidebar-status-rail) { display: none !important; }
+    .sidebar-status-rail {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      align-items: center;
+      padding-top: 4px;
+    }
+    .sidebar.collapsed .sidebar-status-rail { display: flex; }
+
+    /* Notes & History panel (modal-style) */
+    .notes-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 110;
+      animation: fadeIn 0.15s;
+    }
+    .notes-backdrop.active { display: flex; }
+    .notes-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      width: 640px;
+      max-width: 92vw;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      overflow: hidden;
+    }
+    .notes-header {
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+    .notes-header-title { font-weight: 600; font-size: 15px; flex: 1; }
+    .notes-header .notes-close {
+      background: none; border: none; color: var(--text-muted);
+      cursor: pointer; font-size: 20px; line-height: 1; padding: 0;
+    }
+    .notes-header .notes-close:hover { color: var(--text); }
+    .notes-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+    .notes-textarea {
+      width: 100%; min-height: 260px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 13px; padding: 12px 14px; resize: vertical; outline: none;
+      line-height: 1.6;
+    }
+    .notes-textarea:focus { border-color: var(--accent); }
+    .notes-readonly {
+      font-family: 'SF Mono','Fira Code',monospace; font-size: 12.5px;
+      line-height: 1.6; color: var(--text); white-space: pre-wrap;
+    }
+    .notes-footer {
+      padding: 12px 20px; border-top: 1px solid var(--border);
+      display: flex; justify-content: flex-end; gap: 8px;
+    }
+    .notes-footer .btn { padding: 8px 16px; border-radius: 8px; font-size: 13px; font-family: inherit; cursor: pointer; }
+    .notes-footer .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+    .notes-footer .btn-primary { background: var(--accent); border: none; color: white; }
+    .notes-footer .btn-secondary:hover { background: var(--surface-hover); color: var(--text); }
+    .notes-footer .btn-primary:hover { background: #7c3aed; }
+
     .sidebar-refresh {
       margin-top: auto;
       padding-top: 12px;
@@ -242,6 +340,135 @@
       background: var(--surface-hover);
       color: var(--text);
     }
+
+    /* Stem detail popover (spectrum bars + numbers) */
+    .stem-row, .master-row { cursor: pointer; }
+    .stem-row.no-analysis, .master-row.no-analysis { cursor: default; }
+
+    .detail-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      animation: fadeIn 0.15s;
+    }
+    .detail-backdrop.active { display: flex; }
+
+    .detail-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px 24px;
+      min-width: 480px;
+      max-width: 560px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+
+    .detail-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .detail-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      margin-bottom: 16px;
+      word-break: break-all;
+    }
+
+    .detail-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .detail-stat {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      text-align: center;
+    }
+    .detail-stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .detail-stat-value {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 16px;
+      color: var(--text);
+      margin-top: 2px;
+    }
+
+    .detail-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .spectrum-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 140px;
+      margin-bottom: 6px;
+    }
+    .spectrum-bar {
+      flex: 1;
+      background: linear-gradient(180deg, var(--accent), #a78bfa);
+      border-radius: 4px 4px 0 0;
+      min-height: 2px;
+      position: relative;
+    }
+    .spectrum-bar .bar-value {
+      position: absolute;
+      top: -18px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 10px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--text-muted);
+    }
+    .spectrum-labels {
+      display: flex;
+      gap: 6px;
+    }
+    .spectrum-label {
+      flex: 1;
+      text-align: center;
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .detail-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    .detail-close {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .detail-close:hover { background: var(--surface-hover); color: var(--text); }
 
     /* Header */
     .header {
@@ -460,14 +687,19 @@
       font-size: 14px;
     }
 
-    /* Tool calls */
+    /* Tool calls — collapsed by default, click to expand */
     .msg-tool {
       background: var(--tool-bg);
       border: 1px solid var(--tool-border);
-      border-radius: 12px;
-      padding: 10px 14px;
-      font-size: 13px;
+      border-radius: 10px;
+      padding: 6px 12px;
+      font-size: 12.5px;
+      cursor: pointer;
+      transition: background 0.15s;
+      max-width: 800px;
+      width: fit-content;
     }
+    .msg-tool:hover { background: #221a2c; }
 
     .tool-header {
       display: flex;
@@ -475,28 +707,66 @@
       gap: 8px;
       color: var(--accent);
       font-weight: 500;
-      margin-bottom: 4px;
     }
 
-    .tool-icon { font-size: 14px; }
+    .tool-header .tool-chevron {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(-45deg);
+      margin-right: 2px;
+      transition: transform 0.2s;
+    }
+    .msg-tool.expanded .tool-chevron { transform: rotate(45deg); }
+
+    .tool-header .tool-status {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    .msg-tool.has-result .tool-status { color: var(--success); }
+    .msg-tool.has-error  .tool-status { color: var(--error); }
+    .msg-tool.has-error  { border-color: #ef444455; }
+
+    .tool-icon { font-size: 13px; }
+
+    .tool-body {
+      display: none;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--tool-border);
+    }
+    .msg-tool.expanded .tool-body { display: block; }
 
     .tool-detail {
       color: var(--text-muted);
       font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-      font-size: 12px;
+      font-size: 11.5px;
       word-break: break-all;
+      line-height: 1.5;
+    }
+    .tool-detail-label {
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+      font-family: inherit;
     }
 
     .tool-result {
-      margin-top: 6px;
-      padding-top: 6px;
-      border-top: 1px solid var(--tool-border);
-      color: var(--text-muted);
+      margin-top: 8px;
+      color: var(--text);
       font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-      font-size: 12px;
-      max-height: 120px;
+      font-size: 11.5px;
+      max-height: 240px;
       overflow-y: auto;
-      word-break: break-all;
+      word-break: break-word;
+      white-space: pre-wrap;
+      line-height: 1.5;
     }
 
     /* Agent status strip (below messages, above input). Replaces the thin
@@ -823,10 +1093,10 @@
       <h2>StudioMind</h2>
       <p>AI mixing engineer for FL Studio. Ask me anything about your project.</p>
       <div class="welcome-suggestions">
-        <div class="suggestion" onclick="sendSuggestion(this)">Read the project and tell me what you see</div>
-        <div class="suggestion" onclick="sendSuggestion(this)">EQ all tracks for a clean mix</div>
-        <div class="suggestion" onclick="sendSuggestion(this)">Find frequency masking issues</div>
-        <div class="suggestion" onclick="sendSuggestion(this)">What plugins are loaded?</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Read my project and show a table of every track with LUFS and peak</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Render the full mix and find the biggest masking conflict</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">What changed in my project since our last session?</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Cut 2dB at 300Hz on my bass and verify the change</div>
       </div>
     </div>
 
@@ -855,8 +1125,32 @@
     </div>
   </div>
 
+  <!-- Notes / History panel -->
+  <div class="notes-backdrop" id="notesBackdrop">
+    <div class="notes-panel">
+      <div class="notes-header">
+        <span class="notes-header-title" id="notesPanelTitle">Notes</span>
+        <button class="notes-close" id="notesClose">&times;</button>
+      </div>
+      <div class="notes-body" id="notesBody"></div>
+      <div class="notes-footer" id="notesFooter">
+        <button class="btn btn-secondary" id="notesCancelBtn">Close</button>
+        <button class="btn btn-primary" id="notesSaveBtn" style="display:none">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Project sidebar -->
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar" id="sidebar" style="position:relative">
+    <button class="sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">
+      <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <polyline points="6,2 2,5 6,8"/>
+      </svg>
+    </button>
+
+    <!-- Minimal status rail shown when sidebar is collapsed -->
+    <div class="sidebar-status-rail" id="sbStatusRail" title="Expand sidebar"></div>
+
     <div class="sidebar-project" id="sidebarProject">
       <div class="sidebar-project-name" id="sbProjectName">No project</div>
       <div class="sidebar-project-meta" id="sbProjectMeta">Detecting FL Studio...</div>
@@ -885,9 +1179,26 @@
     </div>
 
     <div class="sidebar-refresh">
-      <button class="sidebar-btn" id="sbRefreshBtn">Refresh now</button>
+      <button class="sidebar-btn" id="sbNotesBtn" style="margin-bottom:6px">Notes.md</button>
+      <button class="sidebar-btn" id="sbHistoryBtn" style="margin-bottom:6px">Session history</button>
+      <button class="sidebar-btn" id="sbRefreshBtn">Refresh</button>
     </div>
   </aside>
+
+  <!-- Stem/master spectrum detail popover -->
+  <div class="detail-backdrop" id="detailBackdrop">
+    <div class="detail-panel" id="detailPanel" onclick="event.stopPropagation()">
+      <div class="detail-title" id="detailTitle">Stem</div>
+      <div class="detail-subtitle" id="detailSubtitle"></div>
+      <div class="detail-stats" id="detailStats"></div>
+      <div class="detail-section-title">Spectral balance</div>
+      <div class="spectrum-bars" id="spectrumBars"></div>
+      <div class="spectrum-labels" id="spectrumLabels"></div>
+      <div class="detail-actions">
+        <button class="detail-close" id="detailClose">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Settings modal -->
   <div class="modal-backdrop" id="settingsModal">
@@ -1236,22 +1547,58 @@
     function addToolCall(tool, input) {
       const div = document.createElement('div');
       div.className = 'message msg-tool';
+      // Collapsed by default; click anywhere on the bubble toggles expanded.
       div.innerHTML = `
         <div class="tool-header">
+          <span class="tool-chevron"></span>
           <span class="tool-icon">&#9881;</span>
-          <span>${escapeHtml(tool)}</span>
+          <span class="tool-name">${escapeHtml(tool)}</span>
+          <span class="tool-status">running...</span>
         </div>
-        <div class="tool-detail">${escapeHtml(input)}</div>
+        <div class="tool-body">
+          <div class="tool-detail-label">Input</div>
+          <div class="tool-detail">${escapeHtml(input)}</div>
+        </div>
       `;
+      div.addEventListener('click', (e) => {
+        // Don't toggle on selection drags inside the body
+        if (window.getSelection().toString()) return;
+        div.classList.toggle('expanded');
+      });
       messages.insertBefore(div, thinking);
       return div;
     }
 
     function addToolResult(toolEl, result) {
+      // Mark the tool bubble as completed; update header status
+      toolEl.classList.add('has-result');
+      const statusSpan = toolEl.querySelector('.tool-status');
+      if (statusSpan) {
+        // Try to pull a concise signal from the result JSON
+        let label = 'done';
+        try {
+          const parsed = JSON.parse(result);
+          if (parsed.error) {
+            label = 'error';
+            toolEl.classList.remove('has-result');
+            toolEl.classList.add('has-error');
+          } else if (parsed.ok === false) {
+            label = 'failed';
+          }
+        } catch (_e) { /* not JSON — keep generic 'done' */ }
+        statusSpan.textContent = label;
+      }
+      // Append result to the body
+      const body = toolEl.querySelector('.tool-body');
       const resultDiv = document.createElement('div');
       resultDiv.className = 'tool-result';
       resultDiv.textContent = result;
-      toolEl.appendChild(resultDiv);
+      const label = document.createElement('div');
+      label.className = 'tool-detail-label';
+      label.textContent = 'Result';
+      label.style.marginTop = '8px';
+      body.appendChild(label);
+      body.appendChild(resultDiv);
     }
 
     // Line-by-line markdown renderer. Handles: tables, fenced code blocks,
@@ -1384,6 +1731,65 @@
       }
     });
 
+    // ─── Stem / master detail popup ──────────────────────────────
+    const detailBackdrop = document.getElementById('detailBackdrop');
+    const detailTitle    = document.getElementById('detailTitle');
+    const detailSubtitle = document.getElementById('detailSubtitle');
+    const detailStats    = document.getElementById('detailStats');
+    const spectrumBars   = document.getElementById('spectrumBars');
+    const spectrumLabels = document.getElementById('spectrumLabels');
+    const detailClose    = document.getElementById('detailClose');
+
+    const BAND_LABELS = ['Sub', 'Low', 'Low-mid', 'Mid', 'Hi-mid', 'Presence', 'Air'];
+    const BAND_KEYS   = ['sub', 'low', 'low_mid', 'mid', 'high_mid', 'presence', 'air'];
+
+    function openStemDetail(rec) {
+      const a = rec.analysis;
+      if (!a) return;  // no analysis yet — click is no-op
+
+      detailTitle.textContent    = rec.track_name || rec.filename;
+      detailSubtitle.textContent = rec.filename;
+
+      // Stats row
+      const stats = [
+        { label: 'LUFS',     value: a.lufs    !== undefined ? a.lufs.toFixed(1)    : '--' },
+        { label: 'True peak',value: a.peak_db !== undefined ? a.peak_db.toFixed(1) : '--' },
+        { label: 'RMS',      value: a.rms_db  !== undefined ? a.rms_db.toFixed(1)  : '--' },
+      ];
+      detailStats.innerHTML = stats
+        .map(s => `<div class="detail-stat">
+            <div class="detail-stat-label">${s.label}</div>
+            <div class="detail-stat-value">${s.value}</div>
+          </div>`)
+        .join('');
+
+      // Spectrum bars
+      spectrumBars.innerHTML   = '';
+      spectrumLabels.innerHTML = '';
+      const bands = a.bands || {};
+      const values = BAND_KEYS.map(k => bands[k] !== undefined ? bands[k] : 0);
+      const max    = Math.max(...values, 0.01);
+
+      values.forEach((v, i) => {
+        const pct = Math.round((v / max) * 100);
+        const bar = document.createElement('div');
+        bar.className = 'spectrum-bar';
+        bar.style.height = pct + '%';
+        bar.innerHTML = `<span class="bar-value">${(v * 100).toFixed(0)}%</span>`;
+        spectrumBars.appendChild(bar);
+
+        const lbl = document.createElement('div');
+        lbl.className = 'spectrum-label';
+        lbl.textContent = BAND_LABELS[i];
+        spectrumLabels.appendChild(lbl);
+      });
+
+      detailBackdrop.classList.add('active');
+    }
+
+    detailClose.addEventListener('click', () => detailBackdrop.classList.remove('active'));
+    detailBackdrop.addEventListener('click', () => detailBackdrop.classList.remove('active'));
+
     // ─── Project sidebar ─────────────────────────────────────────
     const sbProjectName = document.getElementById('sbProjectName');
     const sbProjectMeta = document.getElementById('sbProjectMeta');
@@ -1434,27 +1840,35 @@
     }
 
     function renderStem(rec) {
+      const hasAnalysis = rec.analysis && rec.analysis.bands;
       const row = document.createElement('div');
-      row.className = 'stem-row';
-      row.title = rec.filename;
+      row.className = 'stem-row' + (hasAnalysis ? '' : ' no-analysis');
+      row.title = hasAnalysis ? 'Click to see spectrum' : rec.filename;
       row.innerHTML = `
         <span class="status-pip ${rec.status}"></span>
         <span class="stem-track-id">${rec.track_id ?? ''}</span>
         <span class="stem-name">${rec.track_name || rec.filename}</span>
         <span class="stem-lufs">${fmtLufs(rec.analysis)}</span>
       `;
+      if (hasAnalysis) {
+        row.addEventListener('click', () => openStemDetail(rec));
+      }
       return row;
     }
 
     function renderMaster(rec) {
+      const hasAnalysis = rec.analysis && rec.analysis.bands;
       const row = document.createElement('div');
-      row.className = 'master-row';
-      row.title = rec.filename;
+      row.className = 'master-row' + (hasAnalysis ? '' : ' no-analysis');
+      row.title = hasAnalysis ? 'Click to see spectrum' : rec.filename;
       row.innerHTML = `
         <span class="status-pip ${rec.status}"></span>
         <span class="master-name">${rec.filename}</span>
         <span class="master-lufs">${fmtLufs(rec.analysis)}</span>
       `;
+      if (hasAnalysis) {
+        row.addEventListener('click', () => openStemDetail(rec));
+      }
       return row;
     }
 
@@ -1571,6 +1985,119 @@
 
     // Poll every 2s
     setInterval(refreshSidebar, 2000);
+
+    // ─── Sidebar collapse ─────────────────────────────────────────
+    const sidebarEl = document.getElementById('sidebar');
+    const sidebarToggleBtn = document.getElementById('sidebarToggle');
+    const sbStatusRail = document.getElementById('sbStatusRail');
+
+    let sidebarCollapsed = localStorage.getItem('sbCollapsed') === '1';
+
+    function applySidebarState() {
+      if (sidebarCollapsed) {
+        sidebarEl.classList.add('collapsed');
+        document.body.classList.add('sidebar-collapsed');
+      } else {
+        sidebarEl.classList.remove('collapsed');
+        document.body.classList.remove('sidebar-collapsed');
+      }
+    }
+    applySidebarState();
+
+    sidebarToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sidebarCollapsed = !sidebarCollapsed;
+      localStorage.setItem('sbCollapsed', sidebarCollapsed ? '1' : '0');
+      applySidebarState();
+    });
+    sbStatusRail.addEventListener('click', () => {
+      sidebarCollapsed = false;
+      localStorage.setItem('sbCollapsed', '0');
+      applySidebarState();
+    });
+
+    // ─── Notes / History panel ─────────────────────────────────────
+    const notesBackdrop = document.getElementById('notesBackdrop');
+    const notesPanelTitle = document.getElementById('notesPanelTitle');
+    const notesBody = document.getElementById('notesBody');
+    const notesFooter = document.getElementById('notesFooter');
+    const notesSaveBtn = document.getElementById('notesSaveBtn');
+    const notesCancelBtn = document.getElementById('notesCancelBtn');
+    const notesCloseBtn = document.getElementById('notesClose');
+    const sbNotesBtn = document.getElementById('sbNotesBtn');
+    const sbHistoryBtn = document.getElementById('sbHistoryBtn');
+    let notesMode = 'notes'; // 'notes' | 'history'
+
+    function closeNotesPanel() { notesBackdrop.classList.remove('active'); }
+
+    async function openNotesPanel(mode) {
+      notesMode = mode;
+      notesBody.innerHTML = '<div style="color:var(--text-muted);padding:8px">Loading...</div>';
+      notesSaveBtn.style.display = mode === 'notes' ? '' : 'none';
+      notesBackdrop.classList.add('active');
+
+      try {
+        const res = await fetch(`/api/workspace/${mode === 'notes' ? 'notes' : 'history'}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          notesBody.innerHTML = `<div style="color:var(--error)">${err.detail || 'Failed to load.'}</div>`;
+          return;
+        }
+        const data = await res.json();
+        const content = mode === 'notes' ? data.notes : data.history;
+        const projectName = data.project_name || '';
+        notesPanelTitle.textContent = mode === 'notes'
+          ? `${projectName} — notes.md`
+          : `${projectName} — session history`;
+
+        if (mode === 'notes') {
+          const ta = document.createElement('textarea');
+          ta.className = 'notes-textarea';
+          ta.id = 'notesEditorTA';
+          ta.value = content;
+          ta.placeholder = 'Write project notes here — genre, targets, constraints, anything the agent should always know.\n\nThe agent will also add its own observations here.';
+          notesBody.innerHTML = '';
+          notesBody.appendChild(ta);
+        } else {
+          const pre = document.createElement('div');
+          pre.className = 'notes-readonly';
+          pre.textContent = content || '(no history yet)';
+          notesBody.innerHTML = '';
+          notesBody.appendChild(pre);
+        }
+      } catch (e) {
+        notesBody.innerHTML = `<div style="color:var(--error)">Error: ${e.message}</div>`;
+      }
+    }
+
+    notesSaveBtn.addEventListener('click', async () => {
+      const ta = document.getElementById('notesEditorTA');
+      if (!ta) return;
+      const content = ta.value;
+      notesSaveBtn.textContent = 'Saving...';
+      notesSaveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/workspace/notes', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        if (!res.ok) throw new Error('Save failed');
+        closeNotesPanel();
+      } catch (e) {
+        alert('Could not save: ' + e.message);
+      } finally {
+        notesSaveBtn.textContent = 'Save';
+        notesSaveBtn.disabled = false;
+      }
+    });
+
+    [notesCancelBtn, notesCloseBtn].forEach(b => b.addEventListener('click', closeNotesPanel));
+    notesBackdrop.addEventListener('click', closeNotesPanel);
+    document.querySelector('.notes-panel').addEventListener('click', e => e.stopPropagation());
+
+    sbNotesBtn.addEventListener('click', () => openNotesPanel('notes'));
+    sbHistoryBtn.addEventListener('click', () => openNotesPanel('history'));
 
     // Boot: check settings, open modal if needed, then connect
     (async () => {

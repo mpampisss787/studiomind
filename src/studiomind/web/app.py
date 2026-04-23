@@ -178,6 +178,43 @@ async def upload_reference(file: UploadFile = File(...)):
     return {"ok": True, "filename": filename, "path": str(target), "size": len(contents)}
 
 
+@app.get("/api/workspace/notes")
+async def get_notes():
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+    return {
+        "ok": True,
+        "project_name": project.name,
+        "notes": project.read_notes(),
+        "path": str(project.notes_path),
+    }
+
+
+@app.put("/api/workspace/notes")
+async def put_notes(body: dict):
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+    content = body.get("content", "")
+    project.ensure_dirs()
+    project.notes_path.write_text(content, encoding="utf-8")
+    return {"ok": True}
+
+
+@app.get("/api/workspace/history")
+async def get_history():
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+    return {
+        "ok": True,
+        "project_name": project.name,
+        "history": project.read_history(max_entries=50),
+        "path": str(project.history_path),
+    }
+
+
 @app.delete("/api/workspace/reference/{filename}")
 async def delete_reference(filename: str):
     project, err = _resolve_active_project()
