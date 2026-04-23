@@ -472,7 +472,90 @@ class WorkspaceSession:
             time.sleep(min(0.1, deadline - time.monotonic()))
         return False
 
-    def _try_auto_render(self, stop_event: threading.Event | None = None) -> tuple[bool, str]:
+    def _configure_export_dialog(
+        self,
+        desktop: Any,
+        output_dir: Path,
+        batch: bool = False,
+    ) -> bool:
+        """
+        Interact with FL's export dialog after Ctrl+R opens it.
+
+        Attempts to:
+        1. Set the output folder/filename path.
+        2. For batch renders, switch Mode to "Tracks (separate audio files)".
+        3. Click the Start button.
+
+        Returns True if Start was clicked, False if anything went wrong
+        (caller should fall back to manual export).
+        """
+        try:
+            from pywinauto import Application  # type: ignore[import-untyped]
+            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+            import ctypes
+
+            # Find the dialog that appeared — it's the frontmost window that isn't FL itself
+            fl_titles = {"FL Studio 2025", "FL Studio 21", "FL Studio 20"}
+            dialog_win = None
+            for w in desktop.windows():
+                t = w.window_text() or ""
+                if t and t not in fl_titles and w.is_visible():
+                    dialog_win = w
+                    break
+
+            if dialog_win is None:
+                logger.warning("Export dialog not found")
+                return False
+
+            app = Application(backend="uia").connect(handle=dialog_win.handle)
+            dlg = app.window(handle=dialog_win.handle)
+
+            # ── 1. Set the output path ────────────────────────────────
+            # FL's export dialog has a filename/path Edit field. We set the full
+            # directory path — FL will keep its auto-generated filename.
+            path_str = str(output_dir).rstrip("\\") + "\\"
+            edits = dlg.descendants(control_type="Edit")
+            if edits:
+                edits[0].set_focus()
+                edits[0].set_edit_text(path_str)
+                send_keys("{ENTER}")  # confirm folder navigation
+                time.sleep(0.3)
+                logger.info("Set export path: %s", path_str)
+            else:
+                logger.warning("No Edit control found in export dialog")
+
+            # ── 2. Set mode for batch render ──────────────────────────
+            if batch:
+                combos = dlg.descendants(control_type="ComboBox")
+                for combo in combos:
+                    try:
+                        items = combo.item_texts() if hasattr(combo, "item_texts") else []
+                        for item in items:
+                            if "separate" in item.lower() or "tracks" in item.lower():
+                                combo.select(item)
+                                logger.info("Set export mode: %s", item)
+                                break
+                    except Exception:
+                        continue
+
+            # ── 3. Click Start ────────────────────────────────────────
+            buttons = dlg.descendants(control_type="Button")
+            for btn in buttons:
+                name = (btn.window_text() or "").strip().lower()
+                if name in ("start", "ok", "export", "render"):
+                    btn.click()
+                    logger.info("Clicked export button: %s", btn.window_text())
+                    return True
+
+            # Fallback: press Enter (confirms with whatever button has focus)
+            send_keys("{ENTER}")
+            return True
+
+        except Exception as e:
+            logger.warning("Dialog configuration failed: %s", e)
+            return False
+
+    def _try_auto_render(self, stop_event: threading.Event | None = None, batch: bool = False) -> tuple[bool, str]:
         """
         Attempt to trigger FL Studio's WAV export using Windows PostMessage,
         which sends key events directly to FL's window handle without changing
@@ -552,9 +635,16 @@ class WorkspaceSession:
             if self._interruptible_sleep(2.0, stop_event):
                 return False, "Stopped by user"
 
-            send_keys("{ENTER}")  # confirm dialog
+            # Determine the output folder based on render type
+            output_dir = self._project.stems_dir if batch else self._project.masters_dir
 
-            logger.info("Auto-render triggered via SetForegroundWindow + send_keys")
+            # Configure the dialog (set path, mode, click Start)
+            configured = self._configure_export_dialog(desktop, output_dir, batch=batch)
+            if not configured:
+                # Last-ditch fallback: just press Enter with whatever is in the dialog
+                send_keys("{ENTER}")
+
+            logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
             return True, "Export triggered automatically — watching for the file to land."
         except Exception as e:
             return False, f"Auto-render failed ({e}) — please export manually"
@@ -606,7 +696,7 @@ class WorkspaceSession:
             )
             self._project.save_manifest(self._manifest)
 
-        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event)
+        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event, batch=False)
 
         if auto_ok:
             instruction = (
@@ -689,7 +779,7 @@ class WorkspaceSession:
 
         master_info = self.prepare_master() if include_master else None
 
-        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event)
+        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event, batch=True)
 
         if auto_ok:
             instruction = (
