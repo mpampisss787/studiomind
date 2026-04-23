@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -1199,14 +1200,21 @@ class WorkspaceSession:
     def _adopt_batch_master(self, wav_path: Path) -> None:
         """
         Move an FL-batch-exported master WAV from stems/ to masters/ and register
-        it in the manifest.  Called when the watcher finds a file in stems/ that
-        matches the master naming pattern but has no matching pending stem record.
+        it in the manifest. If a file already exists at the destination (e.g.
+        from a previous session), we overwrite it — the just-rendered version
+        is the fresh one we want.
         """
         dest = self._project.masters_dir / wav_path.name
         try:
-            wav_path.rename(dest)
+            # shutil.move overwrites on Windows; Path.rename does not.
+            shutil.move(str(wav_path), str(dest))
         except OSError as e:
             logger.warning("Could not move batch master %s → %s: %s", wav_path, dest, e)
+            # Delete the orphan in stems/ so the watcher doesn't retry forever.
+            try:
+                wav_path.unlink()
+            except OSError:
+                pass
             return
 
         state_hash = None
