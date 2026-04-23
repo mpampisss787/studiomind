@@ -92,6 +92,47 @@
       color: var(--text-muted);
     }
 
+    .sb-export-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      padding: 5px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 11px;
+    }
+    .sb-export-label {
+      color: var(--text-muted);
+      flex-shrink: 0;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .sb-export-path {
+      flex: 1;
+      color: var(--text-muted);
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .sb-copy-btn {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 0 2px;
+      flex-shrink: 0;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .sb-copy-btn:hover { color: var(--accent); }
+    .sb-copy-btn.copied { color: var(--success); }
+
     .sidebar-inactive {
       color: var(--text-muted);
       font-size: 12px;
@@ -1154,6 +1195,12 @@
     <div class="sidebar-project" id="sidebarProject">
       <div class="sidebar-project-name" id="sbProjectName">No project</div>
       <div class="sidebar-project-meta" id="sbProjectMeta">Detecting FL Studio...</div>
+      <!-- Export path row: shown when project is active so user can copy stems path into FL -->
+      <div class="sb-export-row" id="sbExportRow" style="display:none">
+        <span class="sb-export-label">Export folder</span>
+        <span class="sb-export-path" id="sbExportPath" title=""></span>
+        <button class="sb-copy-btn" id="sbCopyPathBtn" title="Copy stems path to clipboard">⎘</button>
+      </div>
     </div>
 
     <div class="sidebar-inactive" id="sbInactiveMessage" style="display:none;"></div>
@@ -1917,6 +1964,18 @@
           setDropZoneIdle();
         }
 
+        // Show export path row so user can copy stems folder into FL
+        const stemsDir = data.stems_dir || '';
+        const exportRow = document.getElementById('sbExportRow');
+        const exportPath = document.getElementById('sbExportPath');
+        if (stemsDir) {
+          exportPath.textContent = stemsDir;
+          exportPath.title = stemsDir;
+          exportRow.style.display = '';
+        } else {
+          exportRow.style.display = 'none';
+        }
+
         sbInactiveMsg.style.display = 'none';
         sbProjectName.textContent = data.project_name;
         const counts = [
@@ -1986,6 +2045,22 @@
       sbRefDrop.classList.remove('drag-over');
       if (e.dataTransfer.files.length) uploadReference(e.dataTransfer.files[0]);
     });
+    // Copy stems path button
+    document.getElementById('sbCopyPathBtn').addEventListener('click', async () => {
+      const path = document.getElementById('sbExportPath').textContent;
+      if (!path) return;
+      try {
+        await navigator.clipboard.writeText(path);
+        const btn = document.getElementById('sbCopyPathBtn');
+        btn.classList.add('copied');
+        btn.textContent = '✓';
+        setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '⎘'; }, 1500);
+      } catch (e) {
+        // Fallback for non-https
+        prompt('Copy this path into FL\'s export dialog:', path);
+      }
+    });
+
     sbRefreshBtn.addEventListener('click', async () => {
       sbRefreshBtn.textContent = 'Refreshing...';
       sbRefreshBtn.disabled = true;
