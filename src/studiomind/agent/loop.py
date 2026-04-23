@@ -142,6 +142,61 @@ class AgentLoop:
         except Exception:
             return 0
 
+    @staticmethod
+    def _msg_has_tool_result(msg: dict) -> bool:
+        """True if this user message has any tool_result blocks."""
+        if msg.get("role") != "user":
+            return False
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return False
+        return any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+    @staticmethod
+    def _msg_has_tool_use(msg: dict) -> bool:
+        """True if this assistant message has any tool_use blocks."""
+        if msg.get("role") != "assistant":
+            return False
+        content = msg.get("content")
+        if not isinstance(content, list):
+            return False
+        return any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+
+    @classmethod
+    def _find_compaction_cut(cls, messages: list, keep_count: int) -> int:
+        """
+        Find a message-index boundary that splits `messages` into "old" (to
+        summarise) and "recent" (to keep verbatim) without orphaning any
+        tool_use/tool_result pair.
+
+        Rules the Anthropic API enforces:
+          - Every `tool_result` in a user message must have a matching
+            `tool_use` in the IMMEDIATELY preceding assistant message.
+          - Therefore the cut cannot land so that a user(tool_result) is the
+            FIRST surviving message (its tool_use would be in the discarded
+            summary).
+          - Nor can it land so that an assistant(tool_use) is the LAST
+            surviving message (its tool_result would be discarded).
+
+        Returns the cut index, or 0 if no safe cut exists (caller should skip
+        compaction entirely in that case).
+        """
+        cut = max(0, len(messages) - keep_count)
+
+        # Walk cut back so recent doesn't start with an orphan tool_result.
+        while cut > 0 and cls._msg_has_tool_result(messages[cut]):
+            cut -= 1
+
+        # If cut now lands on assistant(tool_use), the matching tool_result
+        # must be the next message. If it isn't (malformed conversation), back
+        # off one more to drop the dangling tool_use from the kept tail.
+        if cut < len(messages) and cls._msg_has_tool_use(messages[cut]):
+            nxt = cut + 1
+            if nxt >= len(messages) or not cls._msg_has_tool_result(messages[nxt]):
+                cut = max(0, cut - 1)
+
+        return cut
+
     def _compact_history(self, messages: list) -> list:
         """
         Summarise the older portion of the conversation using Haiku, then return
@@ -160,8 +215,16 @@ class AgentLoop:
         if len(messages) <= keep_count + 2:
             return messages  # not enough to compact
 
-        old_messages   = messages[:-keep_count]
-        recent_messages = messages[-keep_count:]
+        cut = self._find_compaction_cut(messages, keep_count)
+
+        # If the adjustment ate too much, bail on compaction — we'd end up
+        # keeping everything anyway.
+        if cut < 2:
+            logger.info("Compaction skipped: couldn't find a clean cut boundary.")
+            return messages
+
+        old_messages    = messages[:cut]
+        recent_messages = messages[cut:]
 
         old_text = json.dumps(old_messages, default=str, ensure_ascii=False)
 
@@ -371,10 +434,17 @@ class AgentLoop:
                     messages=messages,
                 )
             except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
-                # Only retry on 429 (rate limit) and 529 (overloaded)
+                # Retry ONLY on transient server issues: 429 (rate limit), 529
+                # (overloaded), and 5xx. A 400 is a client error — our payload
+                # is malformed — and no amount of retries will fix it. Fail
+                # fast so the user sees the error instead of waiting ~75s.
                 status = getattr(e, "status_code", None)
-                # 429 = rate limited, 529 = overloaded, 400 = bad request (transient)
-                if status not in (429, 529, 400) and not isinstance(e, anthropic.RateLimitError):
+                is_retryable = (
+                    isinstance(e, anthropic.RateLimitError)
+                    or status in (429, 529)
+                    or (status is not None and 500 <= status < 600)
+                )
+                if not is_retryable:
                     raise
                 last_error = e
                 if attempt == max_retries - 1:
