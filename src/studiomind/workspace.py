@@ -576,14 +576,16 @@ class WorkspaceSession:
             "stems_dir": str(self._project.stems_dir),
             "masters_dir": str(self._project.masters_dir),
             "instruction": (
-                "Batch-render every track in one FL export:\n"
+                "Batch-render all stems + master in one FL export:\n"
                 f"  1. File -> Export -> WAV\n"
                 f"  2. Set Mode to 'Tracks (separate audio files)'\n"
                 f"  3. Output folder: {self._project.stems_dir}\n"
-                f"  4. Start. FL will create one WAV per mixer track.\n"
-                f"Don't rename the files — I'll match them to tracks by name. "
-                f"{('Also export the master separately to: ' + str(self._project.masters_dir)) if include_master else ''}"
-            ).strip(),
+                f"  4. Start.\n"
+                "FL creates one WAV per mixer track, including a master named "
+                "'<project> - Master.wav'. Stems are matched by track name and "
+                "the master file is automatically moved to the masters/ folder — "
+                "no separate master export needed."
+            ),
         }
 
     def prepare_master(self) -> dict:
@@ -832,6 +834,46 @@ class WorkspaceSession:
                 logger.exception("Watcher poll error: %s", e)
             self._watcher_stop.wait(self.WATCH_INTERVAL_S)
 
+    # Pattern FL uses for the master track in a batch export:
+    # "ProjectName - Master.wav" or "ProjectName_Master.wav"
+    _MASTER_SLUG_HINTS = frozenset({"master", "main", "mixdown", "mix"})
+
+    def _is_fl_batch_master(self, filename: str) -> bool:
+        """Return True if this filename looks like FL's auto-named master from a batch export."""
+        stem_slug = slugify(Path(filename).stem)
+        return any(hint in stem_slug for hint in self._MASTER_SLUG_HINTS)
+
+    def _adopt_batch_master(self, wav_path: Path) -> None:
+        """
+        Move an FL-batch-exported master WAV from stems/ to masters/ and register
+        it in the manifest.  Called when the watcher finds a file in stems/ that
+        matches the master naming pattern but has no matching pending stem record.
+        """
+        dest = self._project.masters_dir / wav_path.name
+        try:
+            wav_path.rename(dest)
+        except OSError as e:
+            logger.warning("Could not move batch master %s → %s: %s", wav_path, dest, e)
+            return
+
+        state_hash = None
+        try:
+            state_hash = hash_state(self._fl.read_project_state())
+        except Exception:
+            pass
+
+        rec = RenderRecord(
+            kind=KIND_MASTER,
+            filename=dest.name,
+            status=STATUS_READY,
+            fl_state_hash=state_hash,
+            rendered_at=time.time(),
+        )
+        with self._lock:
+            self._manifest.masters.append(rec)
+            self._project.save_manifest(self._manifest)
+        logger.info("Batch master adopted from stems/ → masters/: %s", dest.name)
+
     def _poll_pending(self) -> None:
         """
         Match files in stems_dir / masters_dir to pending records.
@@ -913,6 +955,17 @@ class WorkspaceSession:
                     rec.rendered_at = time.time()
                     changed = True
                 logger.info("Master ready: %s", matched.name)
+
+        # Auto-adopt: FL batch exports include a master named "ProjectName - Master.wav"
+        # in the stems folder.  Move it to masters/ and register it automatically so the
+        # user doesn't have to do a separate master export.
+        for wav in stem_wavs:
+            if wav in claimed_files:
+                continue
+            if self._is_fl_batch_master(wav.name) and self._check_file_stable(wav):
+                self._adopt_batch_master(wav)
+                claimed_files.add(wav)
+                changed = False  # manifest already saved inside _adopt_batch_master
 
         if changed:
             with self._lock:
