@@ -127,6 +127,53 @@ def _open_active_workspace(fl: FLStudio) -> "WorkspaceSession":
     return session
 
 
+def cmd_test_autorender(args: argparse.Namespace) -> None:
+    """Diagnose why auto-render is or isn't working."""
+    print("\n=== Auto-render diagnostic ===\n")
+
+    # 1. pywinauto import
+    try:
+        from pywinauto import Desktop
+        from pywinauto.keyboard import send_keys  # noqa: F401
+        print("  [OK] pywinauto is installed and importable")
+    except ImportError as e:
+        print(f"  [FAIL] pywinauto import failed: {e}")
+        print("  Fix: python -m pip install pywinauto")
+        print("       Then restart the StudioMind web server.")
+        return
+
+    # 2. Find FL Studio window
+    try:
+        desktop = Desktop(backend="uia")
+        all_windows = [(w.window_text() or "") for w in desktop.windows() if w.window_text()]
+        fl_wins = [t for t in all_windows if "FL Studio" in t]
+        if fl_wins:
+            print(f"  [OK] FL Studio window found: {fl_wins[0]!r}")
+        else:
+            print("  [FAIL] No FL Studio window found.")
+            print("  Make sure FL Studio is open and not minimized.")
+            print("  All visible windows:", all_windows[:10])
+            return
+    except Exception as e:
+        print(f"  [FAIL] Could not enumerate windows: {e}")
+        return
+
+    # 3. Can we focus it?
+    try:
+        fl_win = [w for w in desktop.windows() if "FL Studio" in (w.window_text() or "")][0]
+        fl_win.set_focus()
+        print("  [OK] FL Studio window focused successfully")
+    except Exception as e:
+        print(f"  [WARN] Could not focus FL window: {e}")
+        print("  Auto-render may still work but is less reliable.")
+
+    print("\n  Auto-render should work. Make sure:")
+    print("  1. The StudioMind web server was restarted after installing pywinauto")
+    print("  2. FL's export path is set to your workspace stems/ folder")
+    print("     (do one manual File->Export->WAV to save the path)")
+    print()
+
+
 def cmd_eq(args: argparse.Namespace) -> None:
     """Get or set EQ on a mixer track."""
     with FLStudio() as fl:
@@ -327,6 +374,9 @@ def main() -> None:
     # state
     sub.add_parser("state", help="Read full project state")
 
+    # test-autorender
+    sub.add_parser("test-autorender", help="Check if auto-render via pywinauto is working")
+
     # project
     project_parser = sub.add_parser(
         "project", help="Show FL project name and open StudioMind workspace"
@@ -378,6 +428,7 @@ def main() -> None:
         "ping": cmd_ping,
         "state": cmd_state,
         "project": cmd_project,
+        "test-autorender": cmd_test_autorender,
         "eq": cmd_eq,
         "agent": cmd_agent,
         "chat": cmd_chat,
