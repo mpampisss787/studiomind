@@ -131,6 +131,13 @@ async def workspace_status():
         return {"active": False, "reason": err}
 
     manifest = project.load_manifest()
+
+    # Keep manifest in sync with what's actually on disk.  If the user manually
+    # deleted a rendered file, downgrade it from ready→pending so the UI and the
+    # agent both see "needs re-render" instead of stale "done" state.
+    if project.reconcile_with_filesystem(manifest):
+        project.save_manifest(manifest)
+
     stems = [rec.to_dict() for _, rec in sorted(manifest.stems.items())]
     masters = [rec.to_dict() for rec in manifest.masters]
     references = (

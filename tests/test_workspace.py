@@ -224,6 +224,43 @@ def test_manifest_file_is_valid_json(tmp_path: Path):
     assert "\n  " in text
 
 
+def test_reconcile_clears_missing_files(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    m = p.load_manifest()
+
+    # Add a "ready" stem that exists on disk
+    stem_path = p.stems_dir / "track_003_bass.wav"
+    stem_path.write_bytes(b"\x00" * 100)
+    m.stems[3] = RenderRecord(
+        kind=KIND_STEM, filename="track_003_bass.wav",
+        status=STATUS_READY, track_id=3, track_name="Bass",
+    )
+    # Add a "ready" master that does NOT exist on disk
+    m.masters.append(RenderRecord(
+        kind=KIND_MASTER, filename="master_99999.wav",
+        status=STATUS_READY,
+    ))
+
+    changed = p.reconcile_with_filesystem(m)
+    assert changed is True
+    assert m.stems[3].status == STATUS_READY        # file present — untouched
+    assert m.masters[0].status == STATUS_PENDING     # file missing → reset
+    assert m.masters[0].analysis is None
+
+
+def test_reconcile_no_change_when_files_present(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    m = p.load_manifest()
+    # Create the file before marking ready
+    stem_path = p.stems_dir / "track_003_bass.wav"
+    stem_path.write_bytes(b"\x00" * 100)
+    m.stems[3] = RenderRecord(
+        kind=KIND_STEM, filename="track_003_bass.wav",
+        status=STATUS_READY, track_id=3, track_name="Bass",
+    )
+    assert p.reconcile_with_filesystem(m) is False  # nothing to fix
+
+
 def test_save_is_atomic(tmp_path: Path):
     """save_manifest writes through a temp file then replaces, so partial writes don't corrupt."""
     p = open_project("X", root=tmp_path)

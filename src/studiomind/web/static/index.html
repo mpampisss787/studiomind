@@ -1981,7 +1981,13 @@
       sbRefDrop.classList.remove('drag-over');
       if (e.dataTransfer.files.length) uploadReference(e.dataTransfer.files[0]);
     });
-    sbRefreshBtn.addEventListener('click', refreshSidebar);
+    sbRefreshBtn.addEventListener('click', async () => {
+      sbRefreshBtn.textContent = 'Refreshing...';
+      sbRefreshBtn.disabled = true;
+      await refreshSidebar();
+      sbRefreshBtn.textContent = 'Refresh';
+      sbRefreshBtn.disabled = false;
+    });
 
     // Poll every 2s
     setInterval(refreshSidebar, 2000);

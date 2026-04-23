@@ -284,6 +284,38 @@ class Project:
         t = int(timestamp if timestamp is not None else time.time())
         return f"master_{t}.wav"
 
+    def reconcile_with_filesystem(self, manifest: Manifest) -> bool:
+        """
+        Verify that every 'ready' or 'stale' entry in the manifest still has
+        its file on disk.  Missing files are reset to 'pending' (re-render
+        needed) and their analysis is cleared.
+
+        Returns True if the manifest was modified, so the caller can decide
+        whether to save.  Called on every workspace-status poll so the UI
+        always reflects reality, even when the user deletes files manually.
+        """
+        changed = False
+
+        for rec in manifest.stems.values():
+            if rec.status in (STATUS_READY, STATUS_STALE):
+                path = self.stems_dir / rec.filename
+                if rec.filename and not path.exists():
+                    rec.status = STATUS_PENDING
+                    rec.rendered_at = None
+                    rec.analysis = None
+                    changed = True
+
+        for rec in manifest.masters:
+            if rec.status in (STATUS_READY, STATUS_STALE):
+                path = self.masters_dir / rec.filename
+                if rec.filename and not path.exists():
+                    rec.status = STATUS_PENDING
+                    rec.rendered_at = None
+                    rec.analysis = None
+                    changed = True
+
+        return changed
+
     def mark_stale(self, manifest: Manifest, current_track_hashes: dict[int, str]) -> list[int]:
         """
         Compare current FL per-track hashes against recorded hashes.
