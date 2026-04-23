@@ -412,6 +412,74 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "read_user_preferences",
+        "description": (
+            "Return the global (cross-project) user preferences — durable facts about "
+            "the user's taste and working style that apply to every project. "
+            "Examples: 'never boost above 10kHz', 'prefers -1dBTP master ceiling', "
+            "'always soft-knee compression on vocals'. These are distinct from "
+            "per-project notes.md (project-scoped constraints) and decisions.json "
+            "(per-action history). Call this at session start so your choices "
+            "respect preferences the user has established in prior work. Returned "
+            "sorted strongest-first."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "record_user_preference",
+        "description": (
+            "Record or reinforce a global user preference. Write one when the user "
+            "states a clear rule ('I never want air shelf boosts on vocals') or "
+            "when you observe a strong pattern across multiple sessions (user has "
+            "reverted 3/3 of your +3dB boosts above 8kHz → record 'avoid boosts "
+            "above 8kHz'). Similar existing statements are merged, so feel free "
+            "to call this when in doubt — you won't duplicate. Be specific and "
+            "quote numbers. 'User prefers cuts over boosts in 2-4kHz range.' is "
+            "good. 'User likes clean mixes' is useless."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "statement": {
+                    "type": "string",
+                    "description": "One-sentence preference, specific and actionable.",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["user_explicit", "derived", "agent_observation"],
+                    "description": (
+                        "user_explicit when the user stated it directly; derived when "
+                        "you computed it from decisions.json patterns; "
+                        "agent_observation for single-exchange inferences."
+                    ),
+                },
+            },
+            "required": ["statement"],
+        },
+    },
+    {
+        "name": "read_recent_decisions",
+        "description": (
+            "Return the recent decision log for this project — every destructive "
+            "action StudioMind has made, with its params and outcome "
+            "(pending / kept / reverted). Use this at session start (alongside "
+            "read_project_history and detect_external_changes) to spot patterns: "
+            "if the user has reverted 3 of your last 4 high-shelf boosts, be more "
+            "conservative. Also useful when the user says 'what did you do last "
+            "time?' — the decisions log has the exact params. Returns the last N "
+            "decisions plus an outcome summary across the whole log."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max decisions to return from the tail (default 20).",
+                },
+            },
+        },
+    },
+    {
         "name": "detect_external_changes",
         "description": (
             "Compare the current FL project state to the snapshots StudioMind took at each "
@@ -562,34 +630,100 @@ class ToolExecutor:
     def _exec_read_channel(self, params: dict) -> Any:
         return self._fl.read_channel(params["channel_id"])
 
+    def _log_decision(
+        self,
+        tool: str,
+        params: dict,
+        description: str,
+    ) -> None:
+        """Append a decision record to the project's decisions.json. No-op if
+        no workspace is active (bare-agent mode, tests)."""
+        if self._workspace is None:
+            return
+        try:
+            project = self._workspace.project
+            log = project.load_decisions()
+            track_id = params.get("track_id")
+            track_name = None
+            if track_id is not None:
+                try:
+                    track_name = (self._fl.read_mixer_track(track_id) or {}).get("name")
+                except Exception:
+                    pass
+            log.append(
+                tool=tool,
+                params={k: v for k, v in params.items() if v is not None},
+                description=description,
+                track_id=track_id,
+                track_name=track_name,
+                expected_delta=params.get("expected_delta"),
+            )
+        except Exception as e:
+            # Decision logging is never allowed to break a tool call.
+            logger.warning("Failed to log decision for %s: %s", tool, e)
+
     def _exec_set_builtin_eq(self, params: dict) -> Any:
-        return self._fl.set_eq(
+        result = self._fl.set_eq(
             track_id=params["track_id"],
             band=params["band"],
             gain=params.get("gain"),
             frequency=params.get("frequency"),
             bandwidth=params.get("bandwidth"),
         )
+        band_label = {0: "low", 1: "mid", 2: "high"}.get(params["band"], f"band {params['band']}")
+        self._log_decision(
+            tool="set_builtin_eq",
+            params=params,
+            description=f"built-in EQ {band_label} on track {params['track_id']}",
+        )
+        return result
 
     def _exec_set_plugin_param(self, params: dict) -> Any:
-        return self._fl.set_plugin_param(
+        result = self._fl.set_plugin_param(
             track_id=params["track_id"],
             slot=params["slot"],
             param_id=params["param_id"],
             value=params["value"],
         )
+        self._log_decision(
+            tool="set_plugin_param",
+            params=params,
+            description=f"plugin slot {params['slot']} param {params['param_id']} on track {params['track_id']}",
+        )
+        return result
 
     def _exec_set_mixer_volume(self, params: dict) -> Any:
-        return self._fl.set_mixer_volume(params["track_id"], params["value"])
+        result = self._fl.set_mixer_volume(params["track_id"], params["value"])
+        self._log_decision(
+            tool="set_mixer_volume",
+            params=params,
+            description=f"mixer volume on track {params['track_id']} → {params['value']}",
+        )
+        return result
 
     def _exec_set_mixer_pan(self, params: dict) -> Any:
-        return self._fl.set_mixer_pan(params["track_id"], params["value"])
+        result = self._fl.set_mixer_pan(params["track_id"], params["value"])
+        self._log_decision(
+            tool="set_mixer_pan",
+            params=params,
+            description=f"mixer pan on track {params['track_id']} → {params['value']}",
+        )
+        return result
 
     def _exec_snapshot(self, params: dict) -> Any:
         return self._fl.snapshot(label=params.get("label", "agent action"))
 
     def _exec_revert(self, params: dict) -> Any:
-        return self._fl.revert()
+        result = self._fl.revert()
+        if self._workspace is not None:
+            try:
+                log = self._workspace.project.load_decisions()
+                reverted = log.mark_last_reverted()
+                if reverted is not None:
+                    logger.info("Marked decision %s as reverted", reverted.id)
+            except Exception as e:
+                logger.warning("Failed to mark decision reverted: %s", e)
+        return result
 
     def _exec_analyze_audio(self, params: dict) -> Any:
         from studiomind.analyzer.spectral import analyze_audio
@@ -622,6 +756,15 @@ class ToolExecutor:
             )
             results.append(result)
 
+        self._log_decision(
+            tool="set_proq3",
+            params=params,
+            description=(
+                f"Pro-Q 3 band {params['band']} on track {params['track_id']} "
+                f"({params.get('shape', 'bell')} {params.get('frequency_hz', '?')}Hz "
+                f"{params.get('gain_db', 0)}dB Q={params.get('q', '?')})"
+            ),
+        )
         return {
             "ok": True,
             "band": params["band"],
@@ -857,3 +1000,45 @@ class ToolExecutor:
 
     def _exec_detect_external_changes(self, params: dict) -> Any:
         return self._require_workspace().detect_external_changes()
+
+    def _exec_read_recent_decisions(self, params: dict) -> Any:
+        ws = self._require_workspace()
+        log = ws.project.load_decisions()
+        # Age out stale pending decisions from prior sessions before returning,
+        # so the agent sees realistic outcome counts.
+        aged = log.age_pending()
+        limit = int(params.get("limit", 20))
+        decisions = [d.to_dict() for d in log.recent(limit)]
+        return {
+            "ok": True,
+            "decisions": decisions,
+            "outcome_counts": log.summary_counts(),
+            "aged_to_kept": aged,
+            "total_decisions": len(log.decisions),
+        }
+
+    def _exec_read_user_preferences(self, params: dict) -> Any:
+        from studiomind.user_prefs import UserPreferences
+
+        prefs = UserPreferences.load()
+        return {
+            "ok": True,
+            "preferences": [p.to_dict() for p in prefs.sorted_for_agent()],
+            "count": len(prefs.preferences),
+            "path": str(prefs.path),
+        }
+
+    def _exec_record_user_preference(self, params: dict) -> Any:
+        from studiomind.user_prefs import SOURCE_OBSERVATION, UserPreferences
+
+        statement = (params.get("statement") or "").strip()
+        if not statement:
+            return {"ok": False, "error": "statement is required"}
+        source = params.get("source", SOURCE_OBSERVATION)
+        prefs = UserPreferences.load()
+        pref = prefs.record(statement=statement, source=source)
+        return {
+            "ok": True,
+            "preference": pref.to_dict(),
+            "total_preferences": len(prefs.preferences),
+        }

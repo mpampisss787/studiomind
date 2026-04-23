@@ -33,6 +33,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from studiomind.decisions import DecisionsLog
+
 logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = Path.home() / "StudioMind" / "projects"
@@ -153,6 +155,7 @@ class Project:
     MANIFEST_FILE = "session.json"
     HISTORY_FILE = "history.md"
     NOTES_FILE = "notes.md"
+    DECISIONS_FILE = "decisions.json"
     HISTORY_TAIL_ENTRIES = 20  # how many recent entries to expose to the agent
     HISTORY_PRUNE_KEEP = 30   # keep this many recent entries; summarise the rest
 
@@ -189,6 +192,14 @@ class Project:
         """User-authored project notes (optional). Lives at project root so the
         user can edit it in a plain editor without digging into .studiomind/."""
         return self.root / self.NOTES_FILE
+
+    @property
+    def decisions_path(self) -> Path:
+        return self.meta_dir / self.DECISIONS_FILE
+
+    def load_decisions(self) -> DecisionsLog:
+        """Load the decisions log. Call age_pending() on first load per session."""
+        return DecisionsLog.load(self.decisions_path)
 
     def ensure_dirs(self) -> None:
         for d in (self.stems_dir, self.masters_dir, self.references_dir, self.meta_dir):
