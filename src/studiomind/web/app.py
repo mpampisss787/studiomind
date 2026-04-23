@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -101,6 +101,96 @@ async def post_settings(payload: SettingsPayload):
         "model": get_model(),
         "model_source": model_source(),
     }
+
+
+# ───────────────────────── Workspace API ──────────────────────────
+
+
+def _resolve_active_project():
+    """Detect the active FL project and return (project, error_reason).
+
+    Reads the workspace manifest from disk only — does not require a live MIDI
+    connection, so this is safe to call from a poll endpoint. If FL isn't
+    running or doesn't expose a project, returns (None, reason).
+    """
+    from studiomind.fl_detect import detect_fl_project
+    from studiomind.workspace import open_project
+
+    os_name, os_title = detect_fl_project()
+    if not os_name:
+        if os_title:
+            return None, f"FL is running but no project loaded (title: '{os_title}')."
+        return None, "FL Studio not detected on this machine."
+    return open_project(os_name), None
+
+
+@app.get("/api/workspace/status")
+async def workspace_status():
+    project, err = _resolve_active_project()
+    if project is None:
+        return {"active": False, "reason": err}
+
+    manifest = project.load_manifest()
+    stems = [rec.to_dict() for _, rec in sorted(manifest.stems.items())]
+    masters = [rec.to_dict() for rec in manifest.masters]
+    references = (
+        sorted(p.name for p in project.references_dir.iterdir() if p.is_file())
+        if project.references_dir.exists()
+        else []
+    )
+
+    return {
+        "active": True,
+        "project_name": project.name,
+        "root": str(project.root),
+        "fl_project_path": manifest.fl_project_path,
+        "stems_dir": str(project.stems_dir),
+        "masters_dir": str(project.masters_dir),
+        "references_dir": str(project.references_dir),
+        "stems": stems,
+        "masters": masters,
+        "references": references,
+    }
+
+
+@app.post("/api/workspace/reference")
+async def upload_reference(file: UploadFile = File(...)):
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+
+    # Only accept audio files. Lightweight extension check.
+    allowed = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".ogg", ".m4a"}
+    filename = Path(file.filename or "reference.wav").name  # strip any path components
+    if Path(filename).suffix.lower() not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio type. Allowed: {', '.join(sorted(allowed))}",
+        )
+
+    target = project.references_dir / filename
+    contents = await file.read()
+    # 100 MB cap for safety (long reference tracks are ~50 MB in WAV)
+    if len(contents) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 100 MB).")
+    target.write_bytes(contents)
+
+    return {"ok": True, "filename": filename, "path": str(target), "size": len(contents)}
+
+
+@app.delete("/api/workspace/reference/{filename}")
+async def delete_reference(filename: str):
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+
+    # Prevent path-traversal; only allow deletion of files in references/
+    clean = Path(filename).name
+    target = project.references_dir / clean
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found in references.")
+    target.unlink()
+    return {"ok": True, "filename": clean}
 
 
 # ───────────────────────── Chat WebSocket ──────────────────────────

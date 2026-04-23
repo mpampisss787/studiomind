@@ -27,8 +27,187 @@
       background: var(--bg);
       color: var(--text);
       height: 100vh;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      grid-template-rows: auto 1fr auto;
+      grid-template-areas:
+        "header   sidebar"
+        "messages sidebar"
+        "input    sidebar";
+    }
+
+    .header     { grid-area: header; }
+    .messages   { grid-area: messages; }
+    .input-area { grid-area: input; }
+    .sidebar    { grid-area: sidebar; }
+
+    @media (max-width: 900px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto auto;
+        grid-template-areas:
+          "header"
+          "messages"
+          "input"
+          "sidebar";
+      }
+      .sidebar { border-left: none !important; border-top: 1px solid var(--border); max-height: 280px; }
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
+      gap: 16px;
+      padding: 16px 14px;
+      font-size: 13px;
+    }
+
+    .sidebar h3 {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .sidebar-project {
+      padding: 4px 0 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-project-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 2px;
+    }
+
+    .sidebar-project-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .sidebar-inactive {
+      color: var(--text-muted);
+      font-size: 12px;
+      padding: 8px 0;
+      line-height: 1.5;
+    }
+
+    .sidebar-section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .stem-row, .master-row, .ref-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: default;
+      transition: background 0.1s;
+    }
+
+    .stem-row:hover, .master-row:hover, .ref-row:hover {
+      background: var(--surface-hover);
+    }
+
+    .status-pip {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-pip.ready   { background: var(--success); }
+    .status-pip.pending { background: #eab308; }      /* amber */
+    .status-pip.stale   { background: var(--error); }
+
+    .stem-name, .master-name, .ref-name {
+      flex: 1;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 13px;
+    }
+
+    .stem-lufs, .master-lufs {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .stem-track-id {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 10px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+      min-width: 20px;
+      text-align: right;
+    }
+
+    .ref-delete {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .ref-row:hover .ref-delete { opacity: 1; }
+    .ref-delete:hover { color: var(--error); }
+
+    .ref-drop-zone {
+      margin-top: 6px;
+      padding: 14px 10px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .ref-drop-zone:hover,
+    .ref-drop-zone.drag-over {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    .sidebar-refresh {
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .sidebar-btn {
+      width: 100%;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .sidebar-btn:hover {
+      background: var(--surface-hover);
+      color: var(--text);
     }
 
     /* Header */
@@ -518,6 +697,39 @@
     </div>
   </div>
 
+  <!-- Project sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-project" id="sidebarProject">
+      <div class="sidebar-project-name" id="sbProjectName">No project</div>
+      <div class="sidebar-project-meta" id="sbProjectMeta">Detecting FL Studio...</div>
+    </div>
+
+    <div class="sidebar-inactive" id="sbInactiveMessage" style="display:none;"></div>
+
+    <div class="sidebar-section" id="sbStemsSection" style="display:none;">
+      <h3>Stems</h3>
+      <div id="sbStems"></div>
+    </div>
+
+    <div class="sidebar-section" id="sbMastersSection" style="display:none;">
+      <h3>Master</h3>
+      <div id="sbMasters"></div>
+    </div>
+
+    <div class="sidebar-section" id="sbReferencesSection" style="display:none;">
+      <h3>References</h3>
+      <div id="sbReferences"></div>
+      <div class="ref-drop-zone" id="sbRefDrop">
+        Drop audio file or click to upload
+        <input type="file" id="sbRefFileInput" accept="audio/*,.wav,.mp3,.flac,.aiff,.ogg,.m4a" style="display:none" />
+      </div>
+    </div>
+
+    <div class="sidebar-refresh">
+      <button class="sidebar-btn" id="sbRefreshBtn">Refresh now</button>
+    </div>
+  </aside>
+
   <!-- Settings modal -->
   <div class="modal-backdrop" id="settingsModal">
     <div class="modal">
@@ -866,6 +1078,149 @@
       }
     });
 
+    // ─── Project sidebar ─────────────────────────────────────────
+    const sbProjectName = document.getElementById('sbProjectName');
+    const sbProjectMeta = document.getElementById('sbProjectMeta');
+    const sbInactiveMsg = document.getElementById('sbInactiveMessage');
+    const sbStemsSec = document.getElementById('sbStemsSection');
+    const sbMastersSec = document.getElementById('sbMastersSection');
+    const sbReferencesSec = document.getElementById('sbReferencesSection');
+    const sbStems = document.getElementById('sbStems');
+    const sbMasters = document.getElementById('sbMasters');
+    const sbReferences = document.getElementById('sbReferences');
+    const sbRefDrop = document.getElementById('sbRefDrop');
+    const sbRefFileInput = document.getElementById('sbRefFileInput');
+    const sbRefreshBtn = document.getElementById('sbRefreshBtn');
+
+    function fmtLufs(analysis) {
+      if (!analysis || analysis.lufs === undefined || analysis.lufs === null) return '--';
+      const n = Number(analysis.lufs);
+      if (!isFinite(n)) return '--';
+      return n.toFixed(1) + ' LUFS';
+    }
+
+    function renderStem(rec) {
+      const row = document.createElement('div');
+      row.className = 'stem-row';
+      row.title = rec.filename;
+      row.innerHTML = `
+        <span class="status-pip ${rec.status}"></span>
+        <span class="stem-track-id">${rec.track_id ?? ''}</span>
+        <span class="stem-name">${rec.track_name || rec.filename}</span>
+        <span class="stem-lufs">${fmtLufs(rec.analysis)}</span>
+      `;
+      return row;
+    }
+
+    function renderMaster(rec) {
+      const row = document.createElement('div');
+      row.className = 'master-row';
+      row.title = rec.filename;
+      row.innerHTML = `
+        <span class="status-pip ${rec.status}"></span>
+        <span class="master-name">${rec.filename}</span>
+        <span class="master-lufs">${fmtLufs(rec.analysis)}</span>
+      `;
+      return row;
+    }
+
+    function renderReference(name) {
+      const row = document.createElement('div');
+      row.className = 'ref-row';
+      row.innerHTML = `
+        <span class="status-pip ready"></span>
+        <span class="ref-name" title="${name}">${name}</span>
+        <button class="ref-delete" title="Remove">&times;</button>
+      `;
+      row.querySelector('.ref-delete').addEventListener('click', async () => {
+        if (!confirm(`Remove reference "${name}"?`)) return;
+        await fetch(`/api/workspace/reference/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        refreshSidebar();
+      });
+      return row;
+    }
+
+    async function refreshSidebar() {
+      try {
+        const res = await fetch('/api/workspace/status');
+        const data = await res.json();
+
+        if (!data.active) {
+          sbProjectName.textContent = 'No active project';
+          sbProjectMeta.textContent = '';
+          sbInactiveMsg.textContent = data.reason || 'Waiting for FL Studio...';
+          sbInactiveMsg.style.display = '';
+          sbStemsSec.style.display = 'none';
+          sbMastersSec.style.display = 'none';
+          sbReferencesSec.style.display = 'none';
+          return;
+        }
+
+        sbInactiveMsg.style.display = 'none';
+        sbProjectName.textContent = data.project_name;
+        const counts = [
+          `${data.stems.length} stem${data.stems.length === 1 ? '' : 's'}`,
+          `${data.masters.length} master${data.masters.length === 1 ? '' : 's'}`,
+          `${data.references.length} ref${data.references.length === 1 ? '' : 's'}`,
+        ];
+        sbProjectMeta.textContent = counts.join(' · ');
+
+        // Stems
+        sbStems.innerHTML = '';
+        data.stems.forEach(rec => sbStems.appendChild(renderStem(rec)));
+        sbStemsSec.style.display = data.stems.length > 0 ? '' : 'none';
+
+        // Masters
+        sbMasters.innerHTML = '';
+        data.masters.forEach(rec => sbMasters.appendChild(renderMaster(rec)));
+        sbMastersSec.style.display = data.masters.length > 0 ? '' : 'none';
+
+        // References — always show the section so the drop zone is visible
+        sbReferences.innerHTML = '';
+        data.references.forEach(name => sbReferences.appendChild(renderReference(name)));
+        sbReferencesSec.style.display = '';
+      } catch (e) {
+        console.error('Sidebar refresh failed:', e);
+      }
+    }
+
+    async function uploadReference(file) {
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch('/api/workspace/reference', { method: 'POST', body: form });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert('Upload failed: ' + (err.detail || res.statusText));
+          return;
+        }
+        refreshSidebar();
+      } catch (e) {
+        alert('Upload error: ' + e.message);
+      }
+    }
+
+    // Drop zone wiring
+    sbRefDrop.addEventListener('click', () => sbRefFileInput.click());
+    sbRefFileInput.addEventListener('change', (e) => {
+      if (e.target.files.length) uploadReference(e.target.files[0]);
+      e.target.value = '';
+    });
+    sbRefDrop.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      sbRefDrop.classList.add('drag-over');
+    });
+    sbRefDrop.addEventListener('dragleave', () => sbRefDrop.classList.remove('drag-over'));
+    sbRefDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      sbRefDrop.classList.remove('drag-over');
+      if (e.dataTransfer.files.length) uploadReference(e.dataTransfer.files[0]);
+    });
+    sbRefreshBtn.addEventListener('click', refreshSidebar);
+
+    // Poll every 2s
+    setInterval(refreshSidebar, 2000);
+
     // Boot: check settings, open modal if needed, then connect
     (async () => {
       const s = await fetchSettings();
@@ -874,6 +1229,7 @@
         openSettings(true);
       }
       connectWS();
+      refreshSidebar();
     })();
   </script>
 </body>
