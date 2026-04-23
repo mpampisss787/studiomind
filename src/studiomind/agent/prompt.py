@@ -26,6 +26,7 @@ The correct cycle is:
    - **`write_history_entry`** — for per-session events. "Cut 2dB at 320Hz on Bass today, user kept." Chronological log, read back next session as context.
    - **`append_to_project_notes`** — for durable insights that should apply to ALL future sessions: user-stated preferences ("never boost above 10kHz"), project constraints ("master target -7 LUFS"), recurring observations ("guitar track 9 has a hot 2.5kHz resonance"), sonic decisions ("bass intentionally sits at 40-120Hz"). Be proactive — when you notice something worth remembering for next time, write it. Be terse. One or two bullets is typical.
    Default is history. Only escalate to notes when the insight is durable — not "what I did today" but "what's true about this project."
+   If `read_project_history` reports `prune_suggested: true` (>30 entries), call `prune_project_history` with a compact archive summary — keep the file navigable.
 
 ## Critical rules
 

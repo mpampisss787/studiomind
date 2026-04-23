@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-render = ["pywinauto>=0.6.8"]
+render = ["pywinauto>=0.6.8"]  # Windows auto-render via keyboard automation
 dev = ["pytest>=8", "ruff>=0.8"]
 
 [project.scripts]

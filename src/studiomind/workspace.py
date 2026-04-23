@@ -153,6 +153,7 @@ class Project:
     HISTORY_FILE = "history.md"
     NOTES_FILE = "notes.md"
     HISTORY_TAIL_ENTRIES = 20  # how many recent entries to expose to the agent
+    HISTORY_PRUNE_KEEP = 30   # keep this many recent entries; summarise the rest
 
     def __init__(self, root: Path, name: str) -> None:
         self.root = root
@@ -251,6 +252,40 @@ class Project:
         # parts[1:] are entries minus their leading "## "; restore it
         tail = ["## " + p for p in parts[-max_entries:]]
         return title_block + "\n" + "\n".join(tail)
+
+    def history_entry_count(self) -> int:
+        """Return the total number of entries in history.md."""
+        if not self.history_path.exists():
+            return 0
+        return self.history_path.read_text(encoding="utf-8").count("\n## ")
+
+    def prune_history(self, summary: str) -> None:
+        """
+        Replace everything except the last HISTORY_PRUNE_KEEP entries with
+        a compact summary block.  Call this when history.md has grown large.
+
+        The summary is typically produced by the agent (write_history_entry
+        already does this) or can be passed in from an external compaction step.
+        """
+        if not self.history_path.exists():
+            return
+        content = self.history_path.read_text(encoding="utf-8")
+        parts = content.split("\n## ")
+        if len(parts) <= self.HISTORY_PRUNE_KEEP + 1:
+            return  # not large enough to bother
+
+        title_block = parts[0]
+        entries = ["## " + p for p in parts[1:]]
+        recent = entries[-self.HISTORY_PRUNE_KEEP:]
+
+        pruned = (
+            title_block.rstrip()
+            + "\n\n## Archive summary (auto-compacted)\n"
+            + summary.strip()
+            + "\n\n"
+            + "\n".join(recent)
+        )
+        self.history_path.write_text(pruned, encoding="utf-8")
 
     def read_notes(self) -> str:
         """Return notes.md contents (user- or agent-authored), or empty if absent."""

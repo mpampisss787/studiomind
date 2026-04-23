@@ -310,6 +310,27 @@ async def websocket_chat(ws: WebSocket):
     # Gate 2: FL Studio must be reachable over MIDI.
     try:
         fl = FLStudio()
+
+        # Wire reconnect notifications so the user sees status changes in the chat
+        # rather than a silent freeze or a cryptic error.
+        def _on_midi_disconnect(attempt: int) -> None:
+            asyncio.run_coroutine_threadsafe(
+                ws.send_json({
+                    "type": "system",
+                    "content": f"FL Studio disconnected — reconnecting (attempt {attempt})...",
+                }),
+                loop,
+            )
+
+        def _on_midi_reconnect() -> None:
+            asyncio.run_coroutine_threadsafe(
+                ws.send_json({"type": "system", "content": "Reconnected to FL Studio."}),
+                loop,
+            )
+
+        fl._client._on_disconnect = _on_midi_disconnect
+        fl._client._on_reconnect  = _on_midi_reconnect
+
         fl.connect()
         await ws.send_json({"type": "system", "content": "Connected to FL Studio"})
     except Exception as e:

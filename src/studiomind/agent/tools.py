@@ -390,6 +390,28 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "prune_project_history",
+        "description": (
+            "Compact history.md when it has grown large (typically >30 entries). "
+            "Replaces everything except the last 30 entries with a brief archive "
+            "summary that you write. Call this proactively when read_project_history "
+            "reports a large entry count — it keeps the file readable and prevents "
+            "future sessions from wading through hundreds of old entries.\n\n"
+            "Write the summary to cover the key decisions and measurements from the "
+            "archived portion, so nothing important is truly lost."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Compact markdown summary of the entries being archived.",
+                },
+            },
+            "required": ["summary"],
+        },
+    },
+    {
         "name": "detect_external_changes",
         "description": (
             "Compare the current FL project state to the snapshots StudioMind took at each "
@@ -506,6 +528,7 @@ READ_ONLY_TOOLS = {
     "read_project_history",
     "write_history_entry",
     "append_to_project_notes",
+    "prune_project_history",
     "detect_external_changes",
 }
 
@@ -702,6 +725,7 @@ class ToolExecutor:
         ws = self._require_workspace()
         history = ws.project.read_history()
         notes = ws.project.read_notes()
+        entry_count = ws.project.history_entry_count()
         return {
             "ok": True,
             "project_name": ws.project.name,
@@ -709,6 +733,23 @@ class ToolExecutor:
             "notes_markdown": notes or "(no user notes.md)",
             "has_history": bool(history),
             "has_notes": bool(notes),
+            "total_history_entries": entry_count,
+            "prune_suggested": entry_count > ws.project.HISTORY_PRUNE_KEEP,
+        }
+
+    def _exec_prune_project_history(self, params: dict) -> Any:
+        ws = self._require_workspace()
+        summary = params.get("summary", "").strip()
+        if not summary:
+            return {"ok": False, "error": "summary is required"}
+        before = ws.project.history_entry_count()
+        ws.project.prune_history(summary)
+        after = ws.project.history_entry_count()
+        return {
+            "ok": True,
+            "entries_before": before,
+            "entries_after": after,
+            "path": str(ws.project.history_path),
         }
 
     def _exec_write_history_entry(self, params: dict) -> Any:

@@ -219,51 +219,112 @@ class RenderPipeline:
             ) from e
 
     def _render_via_pywinauto(self, output_path: Path) -> None:
-        """Use pywinauto to control FL Studio's export dialog."""
+        """
+        Full dialog control via pywinauto: sets the output path explicitly.
+
+        More reliable than the shortcut path because it can navigate the Save
+        dialog and type the output path. Requires pywinauto (optional dep).
+
+        NOTE: FL 2025 export shortcut is Ctrl+R (not Ctrl+Shift+R as earlier
+        versions used). The dialog title pattern may need adjustment per version.
+        """
         from pywinauto import Application, Desktop  # type: ignore[import-untyped]
+        from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
 
-        # Connect to running FL Studio
         desktop = Desktop(backend="uia")
-        fl_windows = desktop.windows(title_re=".*FL Studio.*")
+        fl_windows = [w for w in desktop.windows() if "FL Studio" in (w.window_text() or "")]
         if not fl_windows:
-            raise RuntimeError("FL Studio window not found")
+            raise RuntimeError("FL Studio window not found. Is FL Studio running?")
 
-        app = Application(backend="uia").connect(title_re=".*FL Studio.*")
-        main_window = app.window(title_re=".*FL Studio.*")
+        fl_win = fl_windows[0]
+        fl_win.set_focus()
+        time.sleep(0.2)
 
-        # Open export dialog: File → Export → WAV
-        # Using keyboard shortcut is more reliable than menu navigation
-        main_window.type_keys("^+r")  # Ctrl+Shift+R = Export WAV
-        time.sleep(1.0)
+        # Ctrl+R = Export WAV in FL 2025 (older versions may use Ctrl+Shift+R)
+        send_keys("^r")
+        time.sleep(1.5)
 
-        # Find the export dialog
-        export_dialog = app.window(title_re=".*Export.*|.*Render.*|.*Save.*")
-        export_dialog.wait("visible", timeout=5)
+        # Find the Save/Export dialog
+        try:
+            app = Application(backend="uia").connect(title_re=".*FL Studio.*")
+            export_dialog = app.window(title_re="(?i).*export.*|.*render.*|.*save.*wav.*")
+            export_dialog.wait("visible", timeout=5)
+        except Exception:
+            raise RuntimeError(
+                "Export dialog did not appear after Ctrl+R. "
+                "Check FL's export shortcut setting, or use the user-assisted flow."
+            )
 
-        # Set output path in the filename field
-        # This is fragile and depends on FL version — may need adaptation
-        filename_edit = export_dialog.child_window(control_type="Edit")
-        filename_edit.set_text(str(output_path))
+        # Set the filename — clear existing and type the full path
+        try:
+            filename_edit = export_dialog.child_window(control_type="Edit", found_index=0)
+            filename_edit.set_focus()
+            send_keys("^a")
+            filename_edit.type_keys(str(output_path), with_spaces=True)
+        except Exception as e:
+            raise RuntimeError(f"Could not set export path in dialog: {e}") from e
 
-        # Click Start/Save button
-        start_button = export_dialog.child_window(title_re="Start|Save|OK", control_type="Button")
-        start_button.click()
+        # Click Start / Save
+        for btn_title in ("Start", "Save", "OK", "Export"):
+            try:
+                btn = export_dialog.child_window(title=btn_title, control_type="Button")
+                btn.click()
+                break
+            except Exception:
+                continue
+        else:
+            raise RuntimeError("Could not find Start/Save button in export dialog.")
 
-        logger.info("Render triggered via pywinauto → %s", output_path)
+        logger.info("Render triggered via pywinauto dialog → %s", output_path)
 
     def _render_via_shortcut(self, output_path: Path) -> None:
         """
-        Fallback: use the FL device script to simulate keyboard shortcuts.
+        Light-touch auto-render: focus FL, send Ctrl+R, send Enter.
 
-        This is less reliable than pywinauto since we can't control the dialog,
-        but works as a basic trigger. The user must configure FL to auto-export
-        to a known directory.
+        Relies on FL remembering the last export directory from a prior manual
+        export. Works reliably once the output folder has been set at least once.
+
+        FIRST-TIME SETUP (one-time per project):
+          1. In FL: File → Export → WAV
+          2. Navigate to:  <workspace>/stems/   (or masters/)
+          3. Click Start once — FL saves this as the default path
+          After that, Ctrl+R + Enter always exports to the same folder.
+
+        Requirements: pywinauto (pip install studiomind[render])
         """
-        # TODO: Implement via FL device script's ui.cut()/ui.copy() keyboard simulation
-        # For now, raise so the agent knows to ask the user
-        raise NotImplementedError(
-            "Keyboard shortcut render not yet implemented. "
-            "Please export the audio manually and use analyze_audio with the file path."
+        try:
+            from pywinauto import Desktop  # type: ignore[import-untyped]
+            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+        except ImportError:
+            raise ImportError(
+                "Auto-render requires pywinauto. Install it with: "
+                "pip install pywinauto\n"
+                "Or export manually and use the user-assisted render flow."
+            )
+
+        # Find and focus FL's window
+        try:
+            desktop = Desktop(backend="uia")
+            fl_wins = [w for w in desktop.windows() if "FL Studio" in (w.window_text() or "")]
+            if not fl_wins:
+                raise RuntimeError("FL Studio window not found.")
+            fl_wins[0].set_focus()
+            time.sleep(0.3)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Could not focus FL Studio: {e}") from e
+
+        # Trigger export and confirm with previous settings
+        send_keys("^r")          # Ctrl+R = open export dialog
+        time.sleep(1.5)          # wait for dialog to appear
+        send_keys("{ENTER}")     # confirm with whatever path FL remembers
+
+        logger.info(
+            "Auto-render triggered via keyboard shortcut (Ctrl+R + Enter). "
+            "Output should land in FL's last-used export folder. "
+            "Expected path: %s",
+            output_path,
         )
 
     def _wait_for_file(self, path: Path) -> None:

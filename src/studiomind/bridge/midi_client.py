@@ -91,6 +91,9 @@ class MidiClient:
         self._response_events: dict[int, threading.Event] = {}
         self._responses: dict[int, Message] = {}
         self._event_callback: Callable[[Message], None] | None = None
+        # Optional callbacks for reconnect events (wired by web app to push UI updates)
+        self._on_disconnect: Callable[[int], None] | None = None  # arg: attempt number
+        self._on_reconnect: Callable[[], None] | None = None
         self._connected = False
 
     @property
@@ -146,6 +149,10 @@ class MidiClient:
         """
         Send a command to FL Studio and wait for the response.
 
+        On timeout or connection loss, attempts one automatic reconnect before
+        raising so transient FL crashes / loopback hiccups don't kill the
+        session. If reconnect succeeds the command is retried once.
+
         Args:
             data: Command dict (e.g., {"method": "read_project_state", "params": {}})
             timeout: Max seconds to wait for response
@@ -154,9 +161,29 @@ class MidiClient:
             The response Message
 
         Raises:
-            ConnectionError: If not connected
-            TimeoutError: If no response within timeout
+            ConnectionError: If not connected and reconnect failed
+            TimeoutError: If no response within timeout after reconnect attempt
         """
+        return self._send_with_retry(data, timeout, attempts=2)
+
+    def _send_with_retry(self, data: dict, timeout: float, attempts: int) -> Message:
+        last_exc: Exception = ConnectionError("Not connected")
+        for attempt in range(attempts):
+            try:
+                return self._send_once(data, timeout)
+            except (TimeoutError, ConnectionError, OSError) as exc:
+                last_exc = exc
+                if attempt < attempts - 1:
+                    logger.warning(
+                        "MIDI send failed (attempt %d/%d): %s — reconnecting...",
+                        attempt + 1, attempts, exc,
+                    )
+                    if self._on_disconnect:
+                        self._on_disconnect(attempt + 1)
+                    self._attempt_reconnect()
+        raise last_exc
+
+    def _send_once(self, data: dict, timeout: float) -> Message:
         if not self._connected or not self._midi_out:
             raise ConnectionError("Not connected to FL Studio")
 
@@ -164,16 +191,14 @@ class MidiClient:
         event = threading.Event()
         self._response_events[seq_id] = event
 
-        # Encode and send
         chunks = encode(data, MSG_REQUEST, seq_id)
         for chunk in chunks:
             self._midi_out.send_message(list(chunk))
             if len(chunks) > 1:
-                time.sleep(0.002)  # Small delay between chunks to avoid buffer overflow
+                time.sleep(0.002)
 
         logger.debug("Sent request seq=%d method=%s (%d chunks)", seq_id, data.get("method"), len(chunks))
 
-        # Wait for response
         if not event.wait(timeout):
             self._response_events.pop(seq_id, None)
             raise TimeoutError(f"No response from FL Studio within {timeout}s (seq={seq_id})")
@@ -185,6 +210,21 @@ class MidiClient:
             raise RuntimeError(f"FL Studio error: {response.data}")
 
         return response
+
+    def _attempt_reconnect(self) -> None:
+        """Try to disconnect cleanly and reconnect. Silently swallows errors."""
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+        time.sleep(1.5)
+        try:
+            self.connect()
+            logger.info("MIDI reconnect succeeded.")
+            if self._on_reconnect:
+                self._on_reconnect()
+        except Exception as e:
+            logger.warning("MIDI reconnect failed: %s", e)
 
     def _on_midi_message(self, event: tuple, data: None = None) -> None:
         """Callback for incoming MIDI messages from FL Studio."""
