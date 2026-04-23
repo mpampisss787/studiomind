@@ -539,12 +539,26 @@ class WorkspaceSession:
         track_name = track_state.get("name") or f"track_{track_id}"
         filename = self._project.stem_filename(track_id, track_name)
         full_path = self._project.stems_dir / filename
-        # Delete any stale copy so the watcher doesn't flip ready based on an old file
+        # Delete ALL files in stems/ that match this track's slug — not just our
+        # canonical name. FL exports use its own naming scheme (e.g.
+        # "project_KICK ▼ RAYANE.wav") which the watcher fuzzy-matches to the
+        # pending entry. If that file already exists from a previous session, the
+        # watcher marks it READY before auto-render even runs, returning stale data.
+        track_slug = slugify(track_name)
+        if self._project.stems_dir.exists():
+            for wav in list(self._project.stems_dir.glob("*.wav")):
+                if track_slug in slugify(wav.stem):
+                    try:
+                        wav.unlink()
+                        logger.debug("Deleted stale stem: %s", wav.name)
+                    except OSError as e:
+                        logger.warning("Could not delete %s: %s", wav.name, e)
+        # Canonical name (may not exist if FL named it differently, but belt-and-suspenders)
         if full_path.exists():
             try:
                 full_path.unlink()
             except OSError as e:
-                logger.warning("Could not remove stale %s: %s", full_path, e)
+                logger.warning("Could not remove %s: %s", full_path, e)
 
         # Solo the track. If this fails the pending entry is still written so
         # the user can manually solo + render.
