@@ -373,7 +373,8 @@ class AgentLoop:
             except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
                 # Only retry on 429 (rate limit) and 529 (overloaded)
                 status = getattr(e, "status_code", None)
-                if status not in (429, 529) and not isinstance(e, anthropic.RateLimitError):
+                # 429 = rate limited, 529 = overloaded, 400 = bad request (transient)
+                if status not in (429, 529, 400) and not isinstance(e, anthropic.RateLimitError):
                     raise
                 last_error = e
                 if attempt == max_retries - 1:
