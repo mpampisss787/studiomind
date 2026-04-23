@@ -308,17 +308,20 @@ class RenderPipeline:
             fl_wins = [w for w in desktop.windows() if "FL Studio" in (w.window_text() or "")]
             if not fl_wins:
                 raise RuntimeError("FL Studio window not found.")
-            fl_wins[0].set_focus()
-            time.sleep(0.3)
+            fl_win = fl_wins[0]
+            fl_win.set_focus()
+            time.sleep(0.5)
         except RuntimeError:
             raise
         except Exception as e:
             raise RuntimeError(f"Could not focus FL Studio: {e}") from e
 
-        # Trigger export and confirm with previous settings
-        send_keys("^r")          # Ctrl+R = open export dialog
+        # Send Ctrl+R directly to FL's window handle.
+        # Do NOT use global send_keys("^r") — it goes to whatever window has focus
+        # at that instant and could hit the browser, causing a hard-refresh.
+        fl_win.type_keys("^r")   # Ctrl+R sent directly to FL
         time.sleep(1.5)          # wait for dialog to appear
-        send_keys("{ENTER}")     # confirm with whatever path FL remembers
+        send_keys("{ENTER}")     # dialog should have focus now; global Enter is safe
 
         logger.info(
             "Auto-render triggered via keyboard shortcut (Ctrl+R + Enter). "

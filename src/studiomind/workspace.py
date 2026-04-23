@@ -487,12 +487,22 @@ class WorkspaceSession:
             if not fl_wins:
                 return False, "FL Studio window not found"
 
-            fl_wins[0].set_focus()
-            time.sleep(0.3)
-            send_keys("^r")      # Ctrl+R = open export dialog
-            time.sleep(1.8)      # wait for dialog to appear
-            send_keys("{ENTER}") # confirm with FL's remembered export path
-            logger.info("Auto-render triggered via Ctrl+R + Enter")
+            fl_win = fl_wins[0]
+            fl_win.set_focus()
+            time.sleep(0.5)  # give focus time to land
+
+            # Send Ctrl+R DIRECTLY to FL's window handle, NOT via global send_keys.
+            # Global send_keys goes to whatever window has keyboard focus at that
+            # instant — if the browser is focused it would send Ctrl+R to Chrome,
+            # triggering a hard-refresh that disconnects the WebSocket and erases chat.
+            fl_win.type_keys("^r")
+            time.sleep(1.8)  # wait for FL's export dialog to appear
+
+            # By now FL's export dialog has taken focus (Windows gives focus to new
+            # modal dialogs). A global Enter here is safe — it goes to the dialog.
+            send_keys("{ENTER}")
+
+            logger.info("Auto-render triggered via type_keys Ctrl+R + Enter")
             return True, "Export triggered automatically — watching for the file to land."
         except Exception as e:
             return False, f"Auto-render failed ({e}) — please export manually"
