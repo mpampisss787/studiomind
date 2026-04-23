@@ -142,11 +142,25 @@ class AgentLoop:
             messages = [{"role": "user", "content": user_goal}]
             self._conversation_history = messages
 
-        # Convert our tool schemas to Anthropic format
+        # Prompt caching: wrap the system prompt as a cached content block and mark
+        # the last tool with cache_control so the whole tool list is cached too.
+        # This drops per-turn input token cost ~90% for cached bytes and dramatically
+        # lowers rate-limit pressure since cache hits don't count against token-rate
+        # limits the same way. Cache lives for 5 minutes from last use.
+        system_blocks = [
+            {
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
         tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
             for t in TOOL_SCHEMAS
         ]
+        if tools:
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
 
         final_text = ""
 
@@ -158,7 +172,7 @@ class AgentLoop:
                 break
             logger.info("Agent turn %d/%d", turn + 1, self._config.max_turns)
 
-            response = self._api_call_with_retry(system, tools, messages)
+            response = self._api_call_with_retry(system_blocks, tools, messages)
 
             # Collect text and tool_use blocks
             assistant_content = response.content
@@ -207,11 +221,18 @@ class AgentLoop:
 
         return final_text
 
-    def _api_call_with_retry(self, system: str, tools: list, messages: list, max_retries: int = 5) -> Any:
-        """Call the Anthropic API with exponential backoff on rate limits."""
+    def _api_call_with_retry(self, system: Any, tools: list, messages: list, max_retries: int = 5) -> Any:
+        """
+        Call the Anthropic API, honoring the server's retry-after on rate limits
+        and overloaded responses instead of blind exponential backoff.
+        """
         import anthropic
 
+        last_error: Exception | None = None
         for attempt in range(max_retries):
+            if self._stop_event.is_set():
+                # User pressed Stop during a retry wait — bail out fast
+                raise RuntimeError("Stopped by user during retry wait.")
             try:
                 return self._client.messages.create(
                     model=self._config.model,
@@ -220,14 +241,52 @@ class AgentLoop:
                     tools=tools,
                     messages=messages,
                 )
-            except anthropic.RateLimitError as e:
+            except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
+                # Only retry on 429 (rate limit) and 529 (overloaded)
+                status = getattr(e, "status_code", None)
+                if status not in (429, 529) and not isinstance(e, anthropic.RateLimitError):
+                    raise
+                last_error = e
                 if attempt == max_retries - 1:
                     raise
-                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s, 80s
-                logger.warning("Rate limited. Waiting %ds before retry %d/%d...", wait, attempt + 1, max_retries)
+                wait = self._retry_wait_seconds(e, attempt)
+                reason = "Rate limited" if status == 429 or isinstance(e, anthropic.RateLimitError) else "API overloaded"
+                logger.warning(
+                    "%s. Waiting %.1fs before retry %d/%d...", reason, wait, attempt + 1, max_retries
+                )
                 if self._config.on_message:
-                    self._config.on_message(f"[Rate limited — waiting {wait}s before retry...]")
-                time.sleep(wait)
+                    self._config.on_message(
+                        f"[{reason} — waiting {wait:.0f}s before retry ({attempt + 1}/{max_retries})...]"
+                    )
+                # Sleep in small increments so a Stop click can interrupt quickly
+                deadline = time.monotonic() + wait
+                while time.monotonic() < deadline:
+                    if self._stop_event.is_set():
+                        raise RuntimeError("Stopped by user during retry wait.")
+                    time.sleep(min(0.5, deadline - time.monotonic()))
+        # Exhausted retries
+        if last_error is not None:
+            raise last_error
+
+    @staticmethod
+    def _retry_wait_seconds(err: Exception, attempt: int) -> float:
+        """
+        Prefer the server's retry-after header; fall back to exponential backoff.
+        Capped at 120s to avoid wedging the UI on a buggy upstream.
+        """
+        retry_after: str | None = None
+        response = getattr(err, "response", None)
+        if response is not None:
+            headers = getattr(response, "headers", None) or {}
+            # httpx headers are case-insensitive; fall back if exotic
+            retry_after = headers.get("retry-after") or headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), 120.0)
+            except (TypeError, ValueError):
+                pass
+        # Exponential backoff: 5s, 10s, 20s, 40s, 80s
+        return min(2 ** attempt * 5, 120.0)
 
     def _execute_tool(self, tool_name: str, tool_input: dict, tool_use_id: str) -> dict:
         """Execute a single tool call with safety checks."""
