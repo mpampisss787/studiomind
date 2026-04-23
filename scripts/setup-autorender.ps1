@@ -1,4 +1,4 @@
-# StudioMind — auto-render setup
+# StudioMind -- auto-render setup
 #
 # Installs pywinauto so StudioMind can trigger FL's export dialog
 # automatically (Ctrl+R + Enter) instead of asking you to press it.
@@ -38,9 +38,9 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "pywinauto installed." -ForegroundColor Green
 
 # Quick import test
-python -c "from pywinauto import Desktop; from pywinauto.keyboard import send_keys; print('OK')" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "pywinauto installed but import failed — may need a restart." -ForegroundColor Yellow
+$testResult = python -c "from pywinauto import Desktop; from pywinauto.keyboard import send_keys; print('OK')" 2>&1
+if ($testResult -notmatch "OK") {
+    Write-Host "pywinauto installed but import check failed - may need a restart." -ForegroundColor Yellow
 } else {
     Write-Host "pywinauto import OK." -ForegroundColor Green
 }
@@ -55,9 +55,11 @@ Write-Host "3. Set Mode: 'Tracks (separate audio files)'"
 # Try to show the expected stems path
 $projectsRoot = "$env:USERPROFILE\StudioMind\projects"
 if (Test-Path $projectsRoot) {
-    $projects = Get-ChildItem $projectsRoot -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($projects) {
-        $stemsPath = Join-Path $projects.FullName "stems"
+    $latest = Get-ChildItem $projectsRoot -Directory |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+    if ($latest) {
+        $stemsPath = Join-Path $latest.FullName "stems"
         Write-Host "4. Set Output folder to: $stemsPath" -ForegroundColor Yellow
     } else {
         Write-Host "4. Set Output folder to: $projectsRoot\<project_name>\stems" -ForegroundColor Yellow
@@ -66,7 +68,7 @@ if (Test-Path $projectsRoot) {
     Write-Host "4. Set Output folder to: $env:USERPROFILE\StudioMind\projects\<project_name>\stems" -ForegroundColor Yellow
 }
 
-Write-Host "5. Click Start — export once manually."
+Write-Host "5. Click Start -- export once manually."
 Write-Host ""
 Write-Host "After that, StudioMind will trigger exports automatically." -ForegroundColor Green
 Write-Host "Restart the StudioMind web server to pick up pywinauto."
