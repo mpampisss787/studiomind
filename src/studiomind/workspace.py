@@ -729,13 +729,14 @@ class WorkspaceSession:
                 send_keys("{ENTER}")
 
             # ── STAGE 2: FL's render settings dialog ──────────────────
-            # After Save As closes, FL opens a VCL dialog with Mode/Format/Quality
-            # and a Start button. Enumerate it and click Start.
+            print("[AutoRender] STAGE 2: waiting for FL render settings dialog", flush=True)
+
             if self._interruptible_sleep(1.2, stop_event):
                 return True, "Save As closed, but stopped before clicking Start"
 
             settings_dialog = None
-            for _ in range(30):  # 3 seconds
+            print("[AutoRender] Polling for FL settings dialog (foreground change)...", flush=True)
+            for i in range(40):  # 4 seconds
                 if stop_event and stop_event.is_set():
                     return True, "Saved but stopped before Start"
                 time.sleep(0.1)
@@ -745,21 +746,22 @@ class WorkspaceSession:
                     user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_pid2))
                     if fg_pid2.value == fl_pid.value:
                         settings_dialog = fg
+                        print(f"[AutoRender] STAGE 2: found foreground change on iter {i}: hwnd=0x{fg:x}", flush=True)
                         break
 
             if settings_dialog is None:
-                print("[AutoRender] FL settings dialog didn't appear — export may have started directly", flush=True)
-                return True, "Save As closed — export started (no settings dialog)"
+                print(f"[AutoRender] STAGE 2: no new FL window in 4s — current fg=0x{user32.GetForegroundWindow():x}, FL main=0x{hwnd:x}, save_as=0x{dialog_hwnd:x}", flush=True)
+                return True, "Save As closed — no settings dialog detected"
 
-            print(f"[AutoRender] FL settings dialog: hwnd=0x{settings_dialog:x}", flush=True)
+            print(f"[AutoRender] STAGE 2: settings dialog hwnd=0x{settings_dialog:x}", flush=True)
             logger.info("FL render settings dialog: hwnd=0x%x", settings_dialog)
 
             # Enumerate children and find the Start button
             settings_children = _children(settings_dialog)
+            print(f"[AutoRender] STAGE 2: dialog has {len(settings_children)} children", flush=True)
             for c in settings_children:
-                if c["cls"] in ("TQuickFocusBtn", "TButton") or c["text"]:
+                if c["cls"] in ("TQuickFocusBtn", "TButton", "Button") or c["text"]:
                     print(f"  [settings] cls={c['cls']!r} text={c['text']!r} hwnd=0x{c['hwnd']:x}", flush=True)
-                    logger.info("Settings child: cls=%r text=%r", c["cls"], c["text"])
 
             BM_CLICK_LOCAL = 0x00F5
             start_syns = {"start", "render", "begin", "go", "&start", "&render"}
@@ -767,17 +769,15 @@ class WorkspaceSession:
             for c in settings_children:
                 if c["text"].strip().lower() in start_syns:
                     user32.SendMessageW(c["hwnd"], BM_CLICK_LOCAL, 0, 0)
-                    print(f"[AutoRender] Clicked settings button: {c['text']!r}", flush=True)
-                    logger.info("Clicked settings button: %r", c["text"])
+                    print(f"[AutoRender] STAGE 2: Clicked settings button: {c['text']!r}", flush=True)
                     clicked_start = True
                     break
 
             if not clicked_start:
-                # Fallback: send Enter to the settings dialog
                 user32.SetForegroundWindow(settings_dialog)
                 time.sleep(0.2)
                 send_keys("{ENTER}")
-                print("[AutoRender] No Start button matched — sent Enter to settings dialog", flush=True)
+                print("[AutoRender] STAGE 2: No Start button matched — sent Enter", flush=True)
 
             logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
             return True, "Export triggered automatically — watching for the file to land."
