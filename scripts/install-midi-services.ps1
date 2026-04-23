@@ -35,24 +35,43 @@ function Assert-Prereqs {
 }
 
 function Get-LatestAssets {
-    Write-Host "Fetching latest Microsoft MIDI Services release..."
-    $release = Invoke-RestMethod "https://api.github.com/repos/microsoft/MIDI/releases/latest" `
-                                 -Headers @{ "User-Agent" = "studiomind-installer" }
+    # Microsoft/MIDI publishes its releases as pre-releases, so /releases/latest
+    # returns 404. Pull the full /releases list and find the newest release that
+    # has both installers we need — runtime and loopback are sometimes shipped
+    # in different releases.
+    Write-Host "Fetching Microsoft MIDI Services releases..."
+    $headers = @{ "User-Agent" = "studiomind-installer" }
+    $releases = Invoke-RestMethod "https://api.github.com/repos/microsoft/MIDI/releases?per_page=30" `
+                                   -Headers $headers
 
-    $runtime = $release.assets | Where-Object {
-        $_.name -like "Windows.MIDI.Services.SDK.Runtime.and.Tools*x64.exe"
-    } | Select-Object -First 1
+    $runtime = $null
+    $loopback = $null
+    $runtimeTag = $null
+    $loopbackTag = $null
 
-    $loopback = $release.assets | Where-Object {
-        $_.name -like "Windows.MIDI.Services.Basic.MIDI*Loopback*x64.exe"
-    } | Select-Object -First 1
+    foreach ($rel in $releases) {
+        if ($rel.draft) { continue }
+        if (-not $runtime) {
+            $match = $rel.assets | Where-Object {
+                $_.name -like "Windows.MIDI.Services.SDK.Runtime.and.Tools*x64.exe"
+            } | Select-Object -First 1
+            if ($match) { $runtime = $match; $runtimeTag = $rel.tag_name }
+        }
+        if (-not $loopback) {
+            $match = $rel.assets | Where-Object {
+                $_.name -like "Windows.MIDI.Services.Basic.MIDI*Loopback*x64.exe"
+            } | Select-Object -First 1
+            if ($match) { $loopback = $match; $loopbackTag = $rel.tag_name }
+        }
+        if ($runtime -and $loopback) { break }
+    }
 
-    if (-not $runtime)  { throw "Runtime/SDK/Tools installer not found in latest release assets." }
-    if (-not $loopback) { throw "Loopback plugin installer not found in latest release assets." }
+    if (-not $runtime)  { throw "Runtime/SDK/Tools installer not found in any recent release." }
+    if (-not $loopback) { throw "Loopback plugin installer not found in any recent release." }
 
-    Write-Host "  Runtime:  $($runtime.name)"
-    Write-Host "  Loopback: $($loopback.name)"
-    return @{ Runtime = $runtime; Loopback = $loopback; Tag = $release.tag_name }
+    Write-Host "  Runtime:  $($runtime.name)   [$runtimeTag]"
+    Write-Host "  Loopback: $($loopback.name)  [$loopbackTag]"
+    return @{ Runtime = $runtime; Loopback = $loopback }
 }
 
 function Download-Asset {
