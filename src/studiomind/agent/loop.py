@@ -123,6 +123,11 @@ class AgentLoop:
     def action_log(self) -> ActionLog:
         return self._action_log
 
+    @property
+    def last_text_response(self) -> str:
+        """The most recent text the agent sent to the user. Empty if nothing yet."""
+        return self._last_text_response
+
     def request_stop(self) -> None:
         """Signal the agent to stop at the next check point (between turns and inside blocking tools)."""
         self._stop_event.set()
@@ -229,6 +234,7 @@ class AgentLoop:
             The agent's final text response (summary of what was done)
         """
         self._action_log = ActionLog()
+        self._last_text_response: str = ""
         self._stop_event.clear()
 
         system = build_system_prompt()
@@ -287,6 +293,7 @@ class AgentLoop:
             if text_parts:
                 text = "\n".join(text_parts)
                 final_text = text
+                self._last_text_response = text
                 if self._config.on_message:
                     self._config.on_message(text)
 

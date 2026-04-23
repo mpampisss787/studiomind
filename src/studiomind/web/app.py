@@ -459,6 +459,24 @@ async def websocket_chat(ws: WebSocket):
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     finally:
+        # Auto-save the agent's last response to history.md so the NEXT session
+        # can read it and pick up where this one left off — even if the agent
+        # never got a chance to call write_history_entry itself (e.g., connection
+        # dropped right after presenting options A/B/C/D).
+        try:
+            if workspace is not None and "agent" in dir():
+                last = agent.last_text_response
+                if last and len(last.strip()) > 20:
+                    # Truncate very long responses; keep enough for the next
+                    # session to understand the context (options, diagnoses, etc.)
+                    snippet = last.strip()[:1200]
+                    if len(last.strip()) > 1200:
+                        snippet += "\n...[truncated]"
+                    workspace.project.append_history_entry(
+                        f"[Auto-saved on disconnect — last agent response:]\n\n{snippet}"
+                    )
+        except Exception as _e:
+            logger.debug("Auto-save on disconnect failed: %s", _e)
         try:
             if workspace is not None:
                 workspace.stop()
