@@ -463,7 +463,16 @@ class WorkspaceSession:
 
     # ── Auto-render ───────────────────────────────────────────────
 
-    def _try_auto_render(self) -> tuple[bool, str]:
+    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event | None = None) -> bool:
+        """Sleep for `seconds`, checking stop_event every 100ms. Returns True if stopped."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                return True
+            time.sleep(min(0.1, deadline - time.monotonic()))
+        return False
+
+    def _try_auto_render(self, stop_event: threading.Event | None = None) -> tuple[bool, str]:
         """
         Attempt to trigger FL Studio's WAV export using Windows PostMessage,
         which sends key events directly to FL's window handle without changing
@@ -514,16 +523,18 @@ class WorkspaceSession:
             # Force FL to foreground using Win32 directly
             user32.ShowWindow(hwnd, 9)   # SW_RESTORE (un-minimise if needed)
             user32.SetForegroundWindow(hwnd)
-            time.sleep(0.6)  # Windows focus propagation delay
+            if self._interruptible_sleep(0.6, stop_event):
+                return False, "Stopped by user"
 
             # Confirm FL actually has focus before sending keys
             fg = user32.GetForegroundWindow()
             if fg != hwnd:
-                logger.warning("FL did not take foreground (fg=%s, fl=%s) — aborting auto-render", fg, hwnd)
+                logger.warning("FL did not take foreground — aborting auto-render")
                 return False, "Could not bring FL Studio to foreground — please export manually"
 
-            send_keys("^r")   # Ctrl+R now safely goes to FL (it's the foreground window)
-            time.sleep(2.0)   # wait for export dialog
+            send_keys("^r")   # Ctrl+R now safely goes to FL
+            if self._interruptible_sleep(2.0, stop_event):
+                return False, "Stopped by user"
 
             send_keys("{ENTER}")  # confirm dialog
 
@@ -532,7 +543,7 @@ class WorkspaceSession:
         except Exception as e:
             return False, f"Auto-render failed ({e}) — please export manually"
 
-    def prepare_stem(self, track_id: int) -> dict:
+    def prepare_stem(self, track_id: int, stop_event: threading.Event | None = None) -> dict:
         """Solo the track, write a pending stem entry, return the user instruction."""
         track_state = self._fl.read_mixer_track(track_id)
         track_name = track_state.get("name") or f"track_{track_id}"
@@ -579,7 +590,7 @@ class WorkspaceSession:
             )
             self._project.save_manifest(self._manifest)
 
-        auto_ok, auto_msg = self._try_auto_render()
+        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event)
 
         if auto_ok:
             instruction = (
@@ -607,7 +618,7 @@ class WorkspaceSession:
             "instruction": instruction,
         }
 
-    def prepare_batch_render(self, include_master: bool = True) -> dict:
+    def prepare_batch_render(self, include_master: bool = True, stop_event: threading.Event | None = None) -> dict:
         """
         Write pending entries for every active mixer track (and optionally master)
         so the user can do one FL batch export instead of 20 per-track renders.
@@ -662,7 +673,7 @@ class WorkspaceSession:
 
         master_info = self.prepare_master() if include_master else None
 
-        auto_ok, auto_msg = self._try_auto_render()
+        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event)
 
         if auto_ok:
             instruction = (
@@ -695,7 +706,7 @@ class WorkspaceSession:
             "instruction": instruction,
         }
 
-    def prepare_master(self) -> dict:
+    def prepare_master(self, stop_event: threading.Event | None = None) -> dict:
         """Un-solo everything, write a pending master entry, return the user instruction."""
         # Clear any solo state so the master reflects the full mix
         try:

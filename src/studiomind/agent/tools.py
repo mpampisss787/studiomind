@@ -645,13 +645,19 @@ class ToolExecutor:
 
     def _exec_prepare_batch_render(self, params: dict) -> Any:
         include_master = params.get("include_master", True)
-        return self._require_workspace().prepare_batch_render(include_master=include_master)
+        return self._require_workspace().prepare_batch_render(
+            include_master=include_master,
+            stop_event=self._stop_event,
+        )
 
     def _exec_prepare_stem_render(self, params: dict) -> Any:
-        return self._require_workspace().prepare_stem(track_id=params["track_id"])
+        return self._require_workspace().prepare_stem(
+            track_id=params["track_id"],
+            stop_event=self._stop_event,
+        )
 
     def _exec_prepare_master_render(self, params: dict) -> Any:
-        return self._require_workspace().prepare_master()
+        return self._require_workspace().prepare_master(stop_event=self._stop_event)
 
     def _exec_collect_render(self, params: dict) -> Any:
         return self._require_workspace().collect(
@@ -693,12 +699,20 @@ class ToolExecutor:
             ]
 
             for s in ready_stems:
-                r = workspace.collect(track_id=s["track_id"], timeout_s=5.0)
+                r = workspace.collect(
+                    track_id=s["track_id"],
+                    timeout_s=5.0,
+                    stop_event=self._stop_event,
+                )
                 results.append(r)
                 collected_ids.add(("stem", s["track_id"]))
 
             for m in ready_masters:
-                r = workspace.collect(filename=m["filename"], timeout_s=5.0)
+                r = workspace.collect(
+                    filename=m["filename"],
+                    timeout_s=5.0,
+                    stop_event=self._stop_event,
+                )
                 results.append(r)
                 collected_ids.add(("master", m["filename"]))
 
