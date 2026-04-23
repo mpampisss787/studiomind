@@ -239,6 +239,12 @@ class AgentLoop:
                     max_tokens=4096,
                     system=system,
                     tools=tools,
+                    # Force one tool call per turn. Without this, the model can
+                    # emit 5 parallel tool_use blocks in a single response —
+                    # which on destructive edits fires a flurry of rapid API
+                    # round-trips and trips RPM limits. Sequential is safer and
+                    # gives us turn-by-turn control over pacing and Stop.
+                    tool_choice={"type": "auto", "disable_parallel_tool_use": True},
                     messages=messages,
                 )
             except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
