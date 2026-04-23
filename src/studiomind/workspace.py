@@ -461,6 +461,42 @@ class WorkspaceSession:
             "references": references,
         }
 
+    # ── Auto-render ───────────────────────────────────────────────
+
+    def _try_auto_render(self) -> tuple[bool, str]:
+        """
+        Attempt to trigger FL Studio's WAV export via keyboard shortcut.
+        Requires pywinauto (pip install pywinauto) and that FL's default
+        export folder has been set to the workspace stems/ or masters/ dir
+        at least once manually — FL remembers it.
+
+        Returns (triggered: bool, message: str).
+        """
+        try:
+            from pywinauto import Desktop  # type: ignore[import-untyped]
+            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+        except ImportError:
+            return False, "pywinauto not installed — using manual export flow"
+
+        try:
+            desktop = Desktop(backend="uia")
+            fl_wins = [
+                w for w in desktop.windows()
+                if "FL Studio" in (w.window_text() or "")
+            ]
+            if not fl_wins:
+                return False, "FL Studio window not found"
+
+            fl_wins[0].set_focus()
+            time.sleep(0.3)
+            send_keys("^r")      # Ctrl+R = open export dialog
+            time.sleep(1.8)      # wait for dialog to appear
+            send_keys("{ENTER}") # confirm with FL's remembered export path
+            logger.info("Auto-render triggered via Ctrl+R + Enter")
+            return True, "Export triggered automatically — watching for the file to land."
+        except Exception as e:
+            return False, f"Auto-render failed ({e}) — please export manually"
+
     def prepare_stem(self, track_id: int) -> dict:
         """Solo the track, write a pending stem entry, return the user instruction."""
         track_state = self._fl.read_mixer_track(track_id)
@@ -494,6 +530,21 @@ class WorkspaceSession:
             )
             self._project.save_manifest(self._manifest)
 
+        auto_ok, auto_msg = self._try_auto_render()
+
+        if auto_ok:
+            instruction = (
+                f"Track {track_id} ({track_name}) is soloed and export was triggered automatically. "
+                f"{auto_msg} Expected file: {filename}"
+            )
+        else:
+            instruction = (
+                f"Track {track_id} ({track_name}) is soloed in FL. "
+                f"In FL Studio: Ctrl+R → Start → save as '{filename}' "
+                f"into: {self._project.stems_dir}  "
+                f"({auto_msg})"
+            )
+
         return {
             "ok": True,
             "pending": True,
@@ -503,11 +554,8 @@ class WorkspaceSession:
             "filename": filename,
             "full_path": str(full_path),
             "stems_dir": str(self._project.stems_dir),
-            "instruction": (
-                f"Track {track_id} ({track_name}) is soloed in FL. "
-                f"In FL Studio: File -> Export -> WAV (or Ctrl+R), Start, and save as "
-                f"'{filename}' into the folder: {self._project.stems_dir}"
-            ),
+            "auto_render_attempted": auto_ok,
+            "instruction": instruction,
         }
 
     def prepare_batch_render(self, include_master: bool = True) -> dict:
@@ -565,6 +613,25 @@ class WorkspaceSession:
 
         master_info = self.prepare_master() if include_master else None
 
+        auto_ok, auto_msg = self._try_auto_render()
+
+        if auto_ok:
+            instruction = (
+                f"Batch export triggered automatically for {len(tracks_prepared)} tracks. "
+                f"{auto_msg} "
+                "FL will create one file per mixer track. The master is auto-detected "
+                "and moved to masters/."
+            )
+        else:
+            instruction = (
+                f"Batch-render {len(tracks_prepared)} tracks in one FL export:\n"
+                f"  1. File -> Export -> WAV\n"
+                f"  2. Mode: 'Tracks (separate audio files)'\n"
+                f"  3. Output folder: {self._project.stems_dir}\n"
+                f"  4. Start.\n"
+                f"({auto_msg})"
+            )
+
         return {
             "ok": True,
             "pending": True,
@@ -575,17 +642,8 @@ class WorkspaceSession:
             "master": master_info,
             "stems_dir": str(self._project.stems_dir),
             "masters_dir": str(self._project.masters_dir),
-            "instruction": (
-                "Batch-render all stems + master in one FL export:\n"
-                f"  1. File -> Export -> WAV\n"
-                f"  2. Set Mode to 'Tracks (separate audio files)'\n"
-                f"  3. Output folder: {self._project.stems_dir}\n"
-                f"  4. Start.\n"
-                "FL creates one WAV per mixer track, including a master named "
-                "'<project> - Master.wav'. Stems are matched by track name and "
-                "the master file is automatically moved to the masters/ folder — "
-                "no separate master export needed."
-            ),
+            "auto_render_attempted": auto_ok,
+            "instruction": instruction,
         }
 
     def prepare_master(self) -> dict:

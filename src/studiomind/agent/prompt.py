@@ -56,7 +56,7 @@ The correct cycle is:
 - `read_channel(channel_id)` — channel rack instrument info (use sparingly; most mixing decisions are mixer-track-level)
 
 **Rendering (user-assisted; user exports in FL, StudioMind watches the folder)**
-- `prepare_batch_render(include_master=true)` — **preferred for initial analysis.** One FL export → every stem + master analyzed.
+- `prepare_batch_render(include_master=true)` — **preferred for initial analysis.** If pywinauto is installed, the export triggers automatically (no user action). Otherwise, the tool returns an instruction for the user. Check `auto_render_attempted` in the result — if true, just call `collect_all_renders` and wait; if false, read the instruction aloud to the user first.
 - `prepare_stem_render(track_id)` — single track, for targeted re-checks
 - `prepare_master_render` — master only
 - `collect_render(track_id OR filename)` — blocks until ready, returns analysis
