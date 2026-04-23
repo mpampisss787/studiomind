@@ -302,26 +302,45 @@ class RenderPipeline:
                 "Or export manually and use the user-assisted render flow."
             )
 
-        # Find and focus FL's window
+        # Find FL's window handle
         try:
             desktop = Desktop(backend="uia")
             fl_wins = [w for w in desktop.windows() if "FL Studio" in (w.window_text() or "")]
             if not fl_wins:
                 raise RuntimeError("FL Studio window not found.")
-            fl_win = fl_wins[0]
-            fl_win.set_focus()
-            time.sleep(0.5)
+            hwnd = fl_wins[0].handle
         except RuntimeError:
             raise
         except Exception as e:
-            raise RuntimeError(f"Could not focus FL Studio: {e}") from e
+            raise RuntimeError(f"Could not find FL Studio: {e}") from e
 
-        # Send Ctrl+R directly to FL's window handle.
-        # Do NOT use global send_keys("^r") — it goes to whatever window has focus
-        # at that instant and could hit the browser, causing a hard-refresh.
-        fl_win.type_keys("^r")   # Ctrl+R sent directly to FL
-        time.sleep(1.5)          # wait for dialog to appear
-        send_keys("{ENTER}")     # dialog should have focus now; global Enter is safe
+        import ctypes
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        WM_KEYDOWN = 0x0100
+        WM_KEYUP   = 0x0101
+        VK_CONTROL = 0x11
+        VK_R       = 0x52
+        VK_RETURN  = 0x0D
+
+        # PostMessage sends keys directly to FL's message queue — no global keyboard
+        # injection, browser focus is unaffected.
+        user32.PostMessageW(hwnd, WM_KEYDOWN, VK_CONTROL, 0)
+        time.sleep(0.05)
+        user32.PostMessageW(hwnd, WM_KEYDOWN, VK_R, 0)
+        time.sleep(0.05)
+        user32.PostMessageW(hwnd, WM_KEYUP, VK_R, 0)
+        user32.PostMessageW(hwnd, WM_KEYUP, VK_CONTROL, 0)
+        time.sleep(1.5)
+
+        # Find and confirm the export dialog
+        dialog_hwnd = None
+        for w in desktop.windows():
+            if any(kw in (w.window_text() or "").lower() for kw in ("export", "render", "save")):
+                dialog_hwnd = w.handle
+                break
+        target = dialog_hwnd if dialog_hwnd else hwnd
+        user32.PostMessageW(target, WM_KEYDOWN, VK_RETURN, 0)
+        user32.PostMessageW(target, WM_KEYUP,   VK_RETURN, 0)
 
         logger.info(
             "Auto-render triggered via keyboard shortcut (Ctrl+R + Enter). "

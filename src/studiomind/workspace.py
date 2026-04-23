@@ -465,20 +465,29 @@ class WorkspaceSession:
 
     def _try_auto_render(self) -> tuple[bool, str]:
         """
-        Attempt to trigger FL Studio's WAV export via keyboard shortcut.
-        Requires pywinauto (pip install pywinauto) and that FL's default
-        export folder has been set to the workspace stems/ or masters/ dir
-        at least once manually — FL remembers it.
+        Attempt to trigger FL Studio's WAV export using Windows PostMessage,
+        which sends key events directly to FL's window handle without changing
+        global keyboard focus. This avoids the browser-refresh bug caused by
+        pywinauto's send_keys / type_keys (both use global keyboard injection
+        under the hood and can hit the browser).
+
+        Requires pywinauto for window discovery only (finding FL's hwnd).
+        The actual key delivery uses ctypes PostMessage.
 
         Returns (triggered: bool, message: str).
         """
+        import sys
+        if sys.platform != "win32":
+            return False, "auto-render is Windows-only"
+
         try:
             from pywinauto import Desktop  # type: ignore[import-untyped]
-            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
         except ImportError:
             return False, "pywinauto not installed — using manual export flow"
 
         try:
+            import ctypes
+
             desktop = Desktop(backend="uia")
             fl_wins = [
                 w for w in desktop.windows()
@@ -487,22 +496,39 @@ class WorkspaceSession:
             if not fl_wins:
                 return False, "FL Studio window not found"
 
-            fl_win = fl_wins[0]
-            fl_win.set_focus()
-            time.sleep(0.5)  # give focus time to land
+            hwnd = fl_wins[0].handle
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
-            # Send Ctrl+R DIRECTLY to FL's window handle, NOT via global send_keys.
-            # Global send_keys goes to whatever window has keyboard focus at that
-            # instant — if the browser is focused it would send Ctrl+R to Chrome,
-            # triggering a hard-refresh that disconnects the WebSocket and erases chat.
-            fl_win.type_keys("^r")
-            time.sleep(1.8)  # wait for FL's export dialog to appear
+            WM_KEYDOWN = 0x0100
+            WM_KEYUP   = 0x0101
+            VK_CONTROL = 0x11
+            VK_R       = 0x52
+            VK_RETURN  = 0x0D
 
-            # By now FL's export dialog has taken focus (Windows gives focus to new
-            # modal dialogs). A global Enter here is safe — it goes to the dialog.
-            send_keys("{ENTER}")
+            # Post Ctrl+R directly to FL's message queue — never touches global focus,
+            # the browser cannot intercept it.
+            user32.PostMessageW(hwnd, WM_KEYDOWN, VK_CONTROL, 0)
+            time.sleep(0.05)
+            user32.PostMessageW(hwnd, WM_KEYDOWN, VK_R, 0)
+            time.sleep(0.05)
+            user32.PostMessageW(hwnd, WM_KEYUP, VK_R, 0)
+            user32.PostMessageW(hwnd, WM_KEYUP, VK_CONTROL, 0)
 
-            logger.info("Auto-render triggered via type_keys Ctrl+R + Enter")
+            time.sleep(2.0)  # wait for FL's export dialog to open
+
+            # Find the dialog FL opened and post Enter to it
+            dialog_hwnd = None
+            for w in desktop.windows():
+                title = (w.window_text() or "").lower()
+                if any(kw in title for kw in ("export", "render", "save")):
+                    dialog_hwnd = w.handle
+                    break
+
+            target = dialog_hwnd if dialog_hwnd else hwnd
+            user32.PostMessageW(target, WM_KEYDOWN, VK_RETURN, 0)
+            user32.PostMessageW(target, WM_KEYUP,   VK_RETURN, 0)
+
+            logger.info("Auto-render triggered via PostMessage — no global keyboard")
             return True, "Export triggered automatically — watching for the file to land."
         except Exception as e:
             return False, f"Auto-render failed ({e}) — please export manually"
