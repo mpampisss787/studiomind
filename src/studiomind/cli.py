@@ -53,22 +53,42 @@ def cmd_state(args: argparse.Namespace) -> None:
 
 
 def cmd_project(args: argparse.Namespace) -> None:
-    """Ask FL for the current project name, then open the matching StudioMind workspace."""
+    """Detect the active FL project and open its StudioMind workspace.
+
+    Detection priority:
+      1. --name CLI override (always wins)
+      2. FL Python API (general.getName / getFilename) — empty on FL 2025
+      3. OS window title of FL.exe (via Windows user32) — the reliable fallback
+      4. "untitled"
+    """
+    from studiomind.fl_detect import detect_fl_project
     from studiomind.workspace import open_project, project_name_from_fl_path
 
-    with FLStudio() as fl:
-        info = fl.get_project_name()
+    fl_info: dict = {}
+    try:
+        with FLStudio() as fl:
+            fl_info = fl.get_project_name()
+    except Exception as e:
+        print(f"[warn] Could not reach FL for project metadata: {e}")
 
-    print("=== FL returned ===")
-    print(json.dumps(info, indent=2))
+    os_name, os_title = detect_fl_project()
 
-    # Derive a project name: prefer explicit name, then path stem, then window title, else 'untitled'
-    name = info.get("name") or project_name_from_fl_path(info.get("path")) or ""
-    if not name:
-        title = info.get("window_title", "")
-        name = title.strip() or "untitled"
+    print("=== FL API response ===")
+    print(json.dumps(fl_info, indent=2) if fl_info else "  (no response)")
+    print("\n=== OS window title ===")
+    print(f"  title: {os_title!r}")
+    print(f"  parsed project: {os_name!r}")
 
-    project = open_project(name, fl_project_path=info.get("path") or None)
+    override = getattr(args, "name", None)
+    name = (
+        override
+        or fl_info.get("name")
+        or project_name_from_fl_path(fl_info.get("path"))
+        or os_name
+        or "untitled"
+    )
+
+    project = open_project(name, fl_project_path=fl_info.get("path") or None)
     print(f"\n=== StudioMind workspace ===")
     print(f"  name:     {project.name}")
     print(f"  root:     {project.root}")
@@ -266,7 +286,12 @@ def main() -> None:
     sub.add_parser("state", help="Read full project state")
 
     # project
-    sub.add_parser("project", help="Show FL project name and open StudioMind workspace")
+    project_parser = sub.add_parser(
+        "project", help="Show FL project name and open StudioMind workspace"
+    )
+    project_parser.add_argument(
+        "--name", type=str, help="Override auto-detection (use a specific project name)"
+    )
 
     # eq
     eq_parser = sub.add_parser("eq", help="Get/set mixer track EQ")
