@@ -527,16 +527,27 @@ class WorkspaceSession:
                     break
 
             if filename_edit:
+                WM_KEYDOWN = 0x0100
+                WM_KEYUP   = 0x0101
+                VK_RETURN  = 0x0D
+
+                # Set the folder path in the filename field
                 user32.SendMessageW(filename_edit, WM_SETTEXT, 0, path_str)
-                print(f"[AutoRender] Set filename Edit (0x{filename_edit:x}) to: {path_str}", flush=True)
+                print(f"[AutoRender] Set filename field (0x{filename_edit:x}): {path_str}", flush=True)
                 logger.info("Set filename edit 0x%x to %s", filename_edit, path_str)
+
+                # Send Enter to the Edit to trigger "navigate to this folder"
+                user32.SendMessageW(filename_edit, WM_KEYDOWN, VK_RETURN, 0)
+                user32.SendMessageW(filename_edit, WM_KEYUP,   VK_RETURN, 0)
+                time.sleep(0.6)   # wait for folder navigation to complete
+                print("[AutoRender] Navigated to stems folder — now clicking Save", flush=True)
             else:
                 print("[AutoRender] No Edit control found — cannot set path", flush=True)
                 logger.warning("No Edit control in Save As dialog")
 
-            time.sleep(0.1)
-
             # ── Click &Save ────────────────────────────────────────────
+            # After navigation the dialog is in the stems/ folder.
+            # Clicking &Save now exports with FL's auto-generated filename.
             save_synonyms = {"&save", "save", "&open", "start", "ok"}
             for c in child_info:
                 if c["text"].strip().lower() in save_synonyms and c["cls"].lower() == "button":
@@ -681,6 +692,14 @@ class WorkspaceSession:
             # FL may show an internal dialog first (e.g. "Recording" panel) before
             # the Windows Save As appears. We wait specifically for a dialog that
             # has a Save/&Save button — that's definitively the file picker.
+            # Dismiss any stale Save As dialog left open from a previous attempt
+            stale = _wait_for_save_dialog(timeout_s=0.5)
+            if stale:
+                from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+                send_keys("{ESCAPE}")
+                print(f"[AutoRender] Dismissed stale dialog hwnd=0x{stale:x}", flush=True)
+                time.sleep(0.3)
+
             print("[AutoRender] Waiting for Windows Save As dialog...", flush=True)
             dialog_hwnd = _wait_for_save_dialog(timeout_s=8.0)
 
