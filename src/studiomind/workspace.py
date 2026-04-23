@@ -480,94 +480,76 @@ class WorkspaceSession:
         batch: bool = False,
     ) -> bool:
         """
-        Interact with FL's export dialog after Ctrl+R opens it.
+        Set the output path and click Save/Start in FL's export dialog.
 
-        FL Studio uses Delphi/VCL — its controls are NOT accessible via UIA.
-        We use the win32 pywinauto backend + clipboard paste to set the path,
-        and keyboard navigation to set the mode and click Start.
-
-        Returns True if we successfully clicked Start, False on failure.
+        Uses pure Win32 messages (WM_SETTEXT, BM_CLICK) so we never need
+        global keyboard focus — the dialog hwnd is the direct target.
         """
         try:
-            from pywinauto import Application  # type: ignore[import-untyped]
-            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
             import ctypes
 
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            user32   = ctypes.windll.user32   # type: ignore[attr-defined]
+            WM_SETTEXT = 0x000C
+            BM_CLICK   = 0x00F5
+            # Standard Windows file-dialog filename field IDs
+            IDC_FILENAME = 1152   # ComboBoxEx in common dialog
+            IDOK         = 1
 
-            # The dialog is already in the foreground (modal, grabbed focus when opened).
-            # Confirm it's still foreground; if not, bring it up.
-            if user32.GetForegroundWindow() != dialog_hwnd:
-                user32.SetForegroundWindow(dialog_hwnd)
-                time.sleep(0.2)
-
-            logger.info("Configuring export dialog hwnd=0x%x", dialog_hwnd)
-
-            # ── Strategy: clipboard paste for the path ────────────────
             path_str = str(output_dir).rstrip("\\") + "\\"
+            logger.info("Configuring export dialog 0x%x — path: %s", dialog_hwnd, path_str)
 
-            # Use PowerShell Set-Clipboard — avoids Win32 GlobalAlloc pointer
-            # management which caused an access violation on null GlobalLock return.
-            try:
-                import subprocess as _sp
-                _sp.run(
-                    ["powershell", "-Command", f"Set-Clipboard -Value '{path_str}'"],
-                    capture_output=True,
-                    timeout=5,
-                )
-                logger.info("Set clipboard: %s", path_str)
-            except Exception as clip_err:
-                logger.warning("Clipboard set failed: %s", clip_err)
-
-            # Dialog already has focus — paste path directly into the filename field
-            send_keys("^a")    # select all in filename field
-            send_keys("^v")    # paste the path
-            time.sleep(0.2)
-            logger.info("Pasted export path: %s", path_str)
-
-            # ── Find and click Start via raw EnumChildWindows ─────────
-            # pywinauto's win32 backend misses FL's Delphi/VCL buttons.
-            # Use ctypes directly: enumerate every child window, log its
-            # class+text so we know what FL actually calls the button,
-            # then click it via BM_CLICK.
-            BM_CLICK  = 0x00F5
-            GW_CHILD  = 5
-            GW_HWNDNEXT = 2
-
+            # ── 1. Find every child control ───────────────────────────
             child_info: list[dict] = []
-            ChildEnumProc = ctypes.WINFUNCTYPE(
-                ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t
-            )
+            ChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
 
-            def _collect_child(hwnd, _):
+            def _enum(hwnd, _):
                 cls  = ctypes.create_unicode_buffer(128)
                 text = ctypes.create_unicode_buffer(256)
                 user32.GetClassNameW(hwnd, cls,  128)
                 user32.GetWindowTextW(hwnd, text, 256)
                 child_info.append({"hwnd": hwnd, "cls": cls.value, "text": text.value})
-                return True   # continue enumerating
+                return True
 
-            user32.EnumChildWindows(dialog_hwnd, ChildEnumProc(_collect_child), 0)
-
-            # Log everything so we know FL's actual control names
+            user32.EnumChildWindows(dialog_hwnd, ChildProc(_enum), 0)
             for c in child_info:
                 logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
 
-            # Click the button whose text matches Start / OK / Export / Render
-            start_synonyms = {"start", "ok", "export", "render", "s t a r t"}
-            clicked = False
+            # ── 2. Set path in filename / folder field ────────────────
+            # Strategy A: standard Windows common-dialog filename control
+            filename_ctrl = user32.GetDlgItem(dialog_hwnd, IDC_FILENAME)
+            if filename_ctrl:
+                user32.SendMessageW(filename_ctrl, WM_SETTEXT, 0, path_str)
+                logger.info("Set path via DlgItem 1152")
+            else:
+                # Strategy B: find any Edit or ComboBox child and set it
+                for c in child_info:
+                    if c["cls"].lower() in ("edit", "comboboxex32", "combobox", "tquickedit"):
+                        user32.SendMessageW(c["hwnd"], WM_SETTEXT, 0, path_str)
+                        logger.info("Set path via %s hwnd=0x%x", c["cls"], c["hwnd"])
+                        break
+
+            time.sleep(0.1)
+
+            # ── 3. Click Save / Start / OK ────────────────────────────
+            # Strategy A: standard IDOK button
+            ok_ctrl = user32.GetDlgItem(dialog_hwnd, IDOK)
+            if ok_ctrl:
+                user32.SendMessageW(ok_ctrl, BM_CLICK, 0, 0)
+                logger.info("Clicked IDOK (standard Save/OK)")
+                return True
+
+            # Strategy B: find button by text
+            synonyms = {"start", "ok", "save", "export", "render", "&save", "&start"}
             for c in child_info:
-                if c["text"].strip().lower() in start_synonyms:
+                if c["text"].strip().lower() in synonyms:
                     user32.SendMessageW(c["hwnd"], BM_CLICK, 0, 0)
-                    logger.info("Clicked button: %r (cls=%s)", c["text"], c["cls"])
-                    clicked = True
-                    break
+                    logger.info("Clicked %r (cls=%s)", c["text"], c["cls"])
+                    return True
 
-            if not clicked:
-                # Last resort: press Enter — default button gets it
-                send_keys("{ENTER}")
-                logger.info("Fallback: sent Enter to export dialog")
-
+            # Strategy C: WM_COMMAND with IDOK to the dialog itself
+            WM_COMMAND = 0x0111
+            user32.SendMessageW(dialog_hwnd, WM_COMMAND, IDOK, 0)
+            logger.info("Sent WM_COMMAND IDOK to dialog")
             return True
 
         except Exception as e:
