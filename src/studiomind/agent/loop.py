@@ -88,7 +88,14 @@ class AgentLoop:
                 "anthropic package is required for the agent loop. "
                 "Install it with: pip install anthropic"
             )
-        self._client = anthropic.Anthropic()
+        from studiomind.config import get_anthropic_key
+        api_key = get_anthropic_key()
+        if not api_key:
+            raise RuntimeError(
+                "No Anthropic API key configured. Set the ANTHROPIC_API_KEY "
+                "environment variable, or save one in the web UI settings."
+            )
+        self._client = anthropic.Anthropic(api_key=api_key)
         self._executor = ToolExecutor(fl)
         self._action_log = ActionLog()
 

@@ -77,6 +77,29 @@
 
     .status-dot.connected { background: var(--success); }
 
+    .header-settings {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+      padding: 0;
+      margin-left: 8px;
+    }
+
+    .header-settings:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    .header-settings svg { width: 16px; height: 16px; }
+
     /* Messages */
     .messages {
       flex: 1;
@@ -313,6 +336,131 @@
       color: var(--text);
       background: var(--accent-dim);
     }
+
+    /* Settings modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(6px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal-backdrop.active { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 28px;
+      width: 100%;
+      max-width: 460px;
+      margin: 24px;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .modal h2 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .modal-subtitle {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+
+    .modal-field { margin-bottom: 16px; }
+
+    .modal-field label {
+      display: block;
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .modal-field input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .modal-field input:focus { border-color: var(--accent); }
+
+    .modal-source {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .modal-source.env {
+      color: var(--success);
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      color: var(--text);
+      border-color: var(--text-muted);
+    }
+
+    .modal-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .modal-link:hover { text-decoration: underline; }
+
+    .modal-error {
+      color: var(--error);
+      font-size: 13px;
+      margin-top: 8px;
+      min-height: 18px;
+    }
   </style>
 </head>
 <body>
@@ -324,6 +472,12 @@
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Connecting...</span>
     </div>
+    <button class="header-settings" id="settingsBtn" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
   </div>
 
   <div class="messages" id="messages">
@@ -362,6 +516,35 @@
     </div>
   </div>
 
+  <!-- Settings modal -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal">
+      <h2 id="settingsTitle">Welcome to StudioMind</h2>
+      <p class="modal-subtitle" id="settingsSubtitle">
+        Enter your Anthropic API key to get started. It stays on this machine.
+      </p>
+      <div class="modal-field">
+        <label for="apiKeyInput">Anthropic API Key</label>
+        <input
+          type="password"
+          id="apiKeyInput"
+          placeholder="sk-ant-..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <div class="modal-source" id="keySource"></div>
+      </div>
+      <a class="modal-link" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">
+        Get an API key &rarr;
+      </a>
+      <div class="modal-error" id="settingsError"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="settingsCancelBtn">Cancel</button>
+        <button class="btn btn-primary" id="settingsSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const messages = document.getElementById('messages');
     const inputBox = document.getElementById('inputBox');
@@ -370,11 +553,106 @@
     const welcome = document.getElementById('welcome');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsModal = document.getElementById('settingsModal');
+    const settingsTitle = document.getElementById('settingsTitle');
+    const settingsSubtitle = document.getElementById('settingsSubtitle');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const keySource = document.getElementById('keySource');
+    const settingsSaveBtn = document.getElementById('settingsSaveBtn');
+    const settingsCancelBtn = document.getElementById('settingsCancelBtn');
+    const settingsError = document.getElementById('settingsError');
 
     let ws;
     let isProcessing = false;
     let currentToolEl = null;
+    let configured = false;
 
+    // ─── Settings ────────────────────────────────────────────────
+    async function fetchSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        return await res.json();
+      } catch (e) {
+        return { configured: false, source: 'none', key_preview: null };
+      }
+    }
+
+    function openSettings(firstRun) {
+      fetchSettings().then(s => {
+        if (firstRun || !s.configured) {
+          settingsTitle.textContent = 'Welcome to StudioMind';
+          settingsSubtitle.textContent = 'Enter your Anthropic API key to get started. It stays on this machine.';
+          settingsCancelBtn.style.display = 'none';
+        } else {
+          settingsTitle.textContent = 'Settings';
+          settingsSubtitle.textContent = 'Manage your Anthropic API key. The key is stored locally.';
+          settingsCancelBtn.style.display = '';
+        }
+        apiKeyInput.value = '';
+        settingsError.textContent = '';
+        if (s.source === 'env') {
+          keySource.textContent = 'Using ANTHROPIC_API_KEY from environment (' + (s.key_preview || '') + '). Saving here will override it.';
+          keySource.className = 'modal-source env';
+        } else if (s.source === 'config') {
+          keySource.textContent = 'Current saved key: ' + (s.key_preview || '');
+          keySource.className = 'modal-source';
+        } else {
+          keySource.textContent = 'No API key configured yet.';
+          keySource.className = 'modal-source';
+        }
+        settingsModal.classList.add('active');
+        setTimeout(() => apiKeyInput.focus(), 50);
+      });
+    }
+
+    function closeSettings() {
+      settingsModal.classList.remove('active');
+    }
+
+    async function saveSettings() {
+      const key = apiKeyInput.value.trim();
+      settingsError.textContent = '';
+      if (!key) {
+        settingsError.textContent = 'Please enter an API key.';
+        return;
+      }
+      if (!key.startsWith('sk-')) {
+        settingsError.textContent = "API key should start with 'sk-'.";
+        return;
+      }
+      settingsSaveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ anthropic_api_key: key }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          settingsError.textContent = err.detail || 'Failed to save.';
+          return;
+        }
+        closeSettings();
+        configured = true;
+        // Reconnect the WS with the new key active
+        if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+        connectWS();
+      } catch (e) {
+        settingsError.textContent = 'Network error: ' + e.message;
+      } finally {
+        settingsSaveBtn.disabled = false;
+      }
+    }
+
+    settingsBtn.addEventListener('click', () => openSettings(false));
+    settingsSaveBtn.addEventListener('click', saveSettings);
+    settingsCancelBtn.addEventListener('click', closeSettings);
+    apiKeyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveSettings();
+    });
+
+    // ─── WebSocket ────────────────────────────────────────────────
     function connectWS() {
       ws = new WebSocket(`ws://${location.host}/ws`);
 
@@ -384,6 +662,14 @@
 
       ws.onmessage = (e) => {
         const data = JSON.parse(e.data);
+
+        if (data.type === 'needs_setup') {
+          statusDot.classList.remove('connected');
+          statusText.textContent = 'Setup required';
+          sendBtn.disabled = true;
+          openSettings(true);
+          return;
+        }
 
         if (data.type === 'system') {
           statusDot.classList.add('connected');
@@ -419,9 +705,11 @@
 
       ws.onclose = () => {
         statusDot.classList.remove('connected');
-        statusText.textContent = 'Disconnected';
-        sendBtn.disabled = true;
-        setTimeout(connectWS, 3000);
+        if (!settingsModal.classList.contains('active')) {
+          statusText.textContent = 'Disconnected';
+          sendBtn.disabled = true;
+          setTimeout(connectWS, 3000);
+        }
       };
 
       ws.onerror = () => {
@@ -528,7 +816,15 @@
       }
     });
 
-    connectWS();
+    // Boot: check settings, open modal if needed, then connect
+    (async () => {
+      const s = await fetchSettings();
+      configured = s.configured;
+      if (!configured) {
+        openSettings(true);
+      }
+      connectWS();
+    })();
   </script>
 </body>
 </html>
