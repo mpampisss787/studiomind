@@ -52,6 +52,31 @@ def cmd_state(args: argparse.Namespace) -> None:
         print(json.dumps(state, indent=2))
 
 
+def cmd_project(args: argparse.Namespace) -> None:
+    """Ask FL for the current project name, then open the matching StudioMind workspace."""
+    from studiomind.workspace import open_project, project_name_from_fl_path
+
+    with FLStudio() as fl:
+        info = fl.get_project_name()
+
+    print("=== FL returned ===")
+    print(json.dumps(info, indent=2))
+
+    # Derive a project name: prefer explicit name, then path stem, then window title, else 'untitled'
+    name = info.get("name") or project_name_from_fl_path(info.get("path")) or ""
+    if not name:
+        title = info.get("window_title", "")
+        name = title.strip() or "untitled"
+
+    project = open_project(name, fl_project_path=info.get("path") or None)
+    print(f"\n=== StudioMind workspace ===")
+    print(f"  name:     {project.name}")
+    print(f"  root:     {project.root}")
+    print(f"  stems:    {project.stems_dir}")
+    print(f"  masters:  {project.masters_dir}")
+    print(f"  manifest: {project.manifest_path}")
+
+
 def cmd_eq(args: argparse.Namespace) -> None:
     """Get or set EQ on a mixer track."""
     with FLStudio() as fl:
@@ -240,6 +265,9 @@ def main() -> None:
     # state
     sub.add_parser("state", help="Read full project state")
 
+    # project
+    sub.add_parser("project", help="Show FL project name and open StudioMind workspace")
+
     # eq
     eq_parser = sub.add_parser("eq", help="Get/set mixer track EQ")
     eq_parser.add_argument("track", type=int, help="Mixer track ID")
@@ -276,6 +304,7 @@ def main() -> None:
         "ports": cmd_ports,
         "ping": cmd_ping,
         "state": cmd_state,
+        "project": cmd_project,
         "eq": cmd_eq,
         "agent": cmd_agent,
         "chat": cmd_chat,
