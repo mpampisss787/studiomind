@@ -140,30 +140,42 @@ async def workspace_status():
     except Exception as exc:
         logger.warning("reconcile_with_filesystem failed: %s", exc)
 
-    # Build response lists with an additional inline guard: never include a
-    # non-pending entry whose file is actually missing from disk.  This is the
-    # final safety net — if reconcile ran but still left a stale entry, the
-    # response will still omit it.
-    def stem_visible(rec) -> bool:
-        from studiomind.workspace import STATUS_PENDING
-        if rec["status"] == STATUS_PENDING:
-            return True  # pending = waiting for file, always show
-        return (project.stems_dir / rec["filename"]).exists()
+    # STEMS: manifest-driven (pending entries must show before file exists),
+    # but skip any ready/stale entry whose file is gone from disk.
+    stems = []
+    for _, rec in sorted(manifest.stems.items()):
+        d = rec.to_dict()
+        if d["status"] == "pending":
+            stems.append(d)
+        elif d.get("filename") and (project.stems_dir / d["filename"]).exists():
+            stems.append(d)
 
-    def master_visible(rec) -> bool:
-        from studiomind.workspace import STATUS_PENDING
-        if rec["status"] == STATUS_PENDING:
-            return True
-        return (project.masters_dir / rec["filename"]).exists()
-
-    stems = [
-        rec.to_dict() for _, rec in sorted(manifest.stems.items())
-        if stem_visible(rec.to_dict())
-    ]
-    masters = [
-        rec.to_dict() for rec in manifest.masters
-        if master_visible(rec.to_dict())
-    ]
+    # MASTERS: filesystem-first — scan the actual directory, then look up
+    # manifest for analysis data.  If the file is gone it simply won't appear,
+    # no matter what the manifest says.
+    masters = []
+    if project.masters_dir.exists():
+        manifest_by_name = {r.filename: r for r in manifest.masters}
+        for wav in sorted(
+            project.masters_dir.glob("*.wav"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,   # newest first
+        ):
+            rec = manifest_by_name.get(wav.name)
+            if rec:
+                masters.append(rec.to_dict())
+            else:
+                # File on disk with no manifest entry (e.g., user copied it in)
+                masters.append({
+                    "kind": "master",
+                    "filename": wav.name,
+                    "status": "ready",
+                    "track_id": None,
+                    "track_name": None,
+                    "fl_state_hash": None,
+                    "rendered_at": wav.stat().st_mtime,
+                    "analysis": None,
+                })
     references = (
         sorted(p.name for p in project.references_dir.iterdir() if p.is_file())
         if project.references_dir.exists()
