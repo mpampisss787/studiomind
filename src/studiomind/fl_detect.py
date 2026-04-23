@@ -90,3 +90,42 @@ def detect_fl_project() -> tuple[str | None, str | None]:
     if title is None:
         return None, None
     return parse_fl_title(title), title
+
+
+def enumerate_all_visible_windows() -> list[str]:
+    """Dump every visible top-level window title. Diagnostic aid when FL detection fails."""
+    if sys.platform != "win32":
+        return []
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return []
+
+    try:
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+    except (OSError, AttributeError):
+        return []
+
+    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    titles: list[str] = []
+
+    def callback(hwnd: int, _lparam: int) -> bool:
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buff = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buff, length + 1)
+        titles.append(buff.value)
+        return True
+
+    try:
+        user32.EnumWindows(EnumWindowsProc(callback), 0)
+    except OSError:
+        pass
+
+    return titles

@@ -61,8 +61,14 @@ def cmd_project(args: argparse.Namespace) -> None:
       3. OS window title of FL.exe (via Windows user32) — the reliable fallback
       4. "untitled"
     """
-    from studiomind.fl_detect import detect_fl_project
+    from studiomind.fl_detect import detect_fl_project, enumerate_all_visible_windows
     from studiomind.workspace import open_project, project_name_from_fl_path
+
+    if getattr(args, "list_windows", False):
+        print("=== All visible top-level windows ===")
+        for t in enumerate_all_visible_windows():
+            print(f"  {t!r}")
+        return
 
     fl_info: dict = {}
     try:
@@ -291,6 +297,11 @@ def main() -> None:
     )
     project_parser.add_argument(
         "--name", type=str, help="Override auto-detection (use a specific project name)"
+    )
+    project_parser.add_argument(
+        "--list-windows",
+        action="store_true",
+        help="Dump all visible window titles (diagnostic for FL detection)",
     )
 
     # eq
