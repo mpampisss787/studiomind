@@ -492,6 +492,7 @@ class WorkspaceSession:
 
             user32   = ctypes.windll.user32  # type: ignore[attr-defined]
             path_str = str(output_dir).rstrip("\\") + "\\"
+            print(f"[AutoRender] Typing path into 0x{dialog_hwnd:x}: {path_str}", flush=True)
             logger.info("Typing path into dialog 0x%x: %s", dialog_hwnd, path_str)
 
             # Log dialog children for diagnostics
@@ -508,6 +509,7 @@ class WorkspaceSession:
 
             user32.EnumChildWindows(dialog_hwnd, ChildProc(_enum), 0)
             for c in child_info:
+                print(f"  [child] cls={c['cls']!r} text={c['text']!r} hwnd=0x{c['hwnd']:x}", flush=True)
                 logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
 
             # Define INPUT structures for SendInput
@@ -562,6 +564,7 @@ class WorkspaceSession:
             send_inputs(ki_down(VK_RETURN))
             send_inputs(ki_up(VK_RETURN))
 
+            print("[AutoRender] Typed path + pressed Enter×2", flush=True)
             logger.info("Typed path + pressed Enter×2")
             return True
 
@@ -645,44 +648,53 @@ class WorkspaceSession:
                 logger.warning("FL did not take foreground after AttachThreadInput — aborting auto-render")
                 return False, "Could not bring FL Studio to foreground — please export manually"
 
-            # initial_fg must be set AFTER FL is the foreground window, so that
-            # the "changed to something other than initial_fg" test catches the
-            # export dialog, not just the fact that FL itself became foreground.
-            initial_fg = user32.GetForegroundWindow()  # FL's main window (it's fg now)
+            # initial_fg must be set AFTER FL is the foreground window.
+            initial_fg = user32.GetForegroundWindow()
+            print(f"[AutoRender] FL hwnd=0x{initial_fg:x} — pressing Ctrl+R", flush=True)
             logger.info("FL in foreground hwnd=0x%x, waiting for dialog...", initial_fg)
 
-            send_keys("^r")   # Ctrl+R now safely goes to FL
+            send_keys("^r")
 
-            dialog_hwnd = None
-            for _ in range(30):   # up to 3 seconds, 100ms steps
-                if stop_event and stop_event.is_set():
-                    return False, "Stopped by user"
-                time.sleep(0.1)
-                current_fg = user32.GetForegroundWindow()
-                if current_fg != initial_fg and current_fg != 0:
-                    fg_pid = ctypes.c_ulong()
-                    user32.GetWindowThreadProcessId(current_fg, ctypes.byref(fg_pid))
-                    if fg_pid.value == fl_pid.value:
-                        dialog_hwnd = current_fg
-                        logger.info("Export dialog in foreground: hwnd=0x%x", dialog_hwnd)
-                        break
+            def _wait_for_new_fg(reference_hwnd: int, timeout_s: float = 5.0) -> int | None:
+                """Wait until GetForegroundWindow differs from reference_hwnd. Returns new hwnd."""
+                steps = int(timeout_s / 0.1)
+                for _ in range(steps):
+                    if stop_event and stop_event.is_set():
+                        return None
+                    time.sleep(0.1)
+                    fg = user32.GetForegroundWindow()
+                    if fg != reference_hwnd and fg != 0:
+                        print(f"[AutoRender] Foreground changed to hwnd=0x{fg:x}", flush=True)
+                        logger.info("Foreground changed to hwnd=0x%x", fg)
+                        return fg
+                return None
+
+            # Stage 1: wait for any dialog/window that FL opens after Ctrl+R
+            dialog_hwnd = _wait_for_new_fg(initial_fg, timeout_s=5.0)
 
             if dialog_hwnd is None:
-                logger.warning("Export dialog did not take foreground after Ctrl+R")
-                # Still try Enter as last resort
+                print("[AutoRender] No foreground change detected — sending Enter as fallback", flush=True)
+                logger.warning("No foreground change after Ctrl+R — pressing Enter fallback")
                 send_keys("{ENTER}")
-                return True, "Ctrl+R sent but dialog not detected — Enter pressed as fallback"
+                # Stage 2: Enter may have dismissed an internal FL dialog; wait for
+                # the Windows Save As that sometimes follows
+                dialog_hwnd = _wait_for_new_fg(initial_fg, timeout_s=4.0)
+                if dialog_hwnd is None:
+                    print("[AutoRender] Still no dialog — giving up", flush=True)
+                    return True, "Ctrl+R sent, Enter fallback used — no dialog detected"
 
-            # Dialog has focus — give it a moment to fully render
-            if self._interruptible_sleep(0.3, stop_event):
+            print(f"[AutoRender] Dialog hwnd=0x{dialog_hwnd:x} — configuring", flush=True)
+
+            # Give the dialog a moment to fully render
+            if self._interruptible_sleep(0.4, stop_event):
                 return False, "Stopped by user"
 
             # Determine the output folder based on render type
             output_dir = self._project.stems_dir if batch else self._project.masters_dir
 
-            # Configure the dialog (set path, click Start)
             configured = self._configure_export_dialog(desktop, dialog_hwnd, output_dir, batch=batch)
             if not configured:
+                print("[AutoRender] Dialog config failed — sending Enter", flush=True)
                 send_keys("{ENTER}")
 
             logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
