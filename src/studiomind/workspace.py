@@ -645,11 +645,11 @@ class WorkspaceSession:
                 logger.warning("FL did not take foreground after AttachThreadInput — aborting auto-render")
                 return False, "Could not bring FL Studio to foreground — please export manually"
 
-            # Note the current foreground window before pressing Ctrl+R.
-            # FL's export dialog is MODAL — when it opens it grabs keyboard focus.
-            # So we just watch for the foreground window to change to a different
-            # FL window. That new foreground IS the export dialog.
-            initial_fg = user32.GetForegroundWindow()
+            # initial_fg must be set AFTER FL is the foreground window, so that
+            # the "changed to something other than initial_fg" test catches the
+            # export dialog, not just the fact that FL itself became foreground.
+            initial_fg = user32.GetForegroundWindow()  # FL's main window (it's fg now)
+            logger.info("FL in foreground hwnd=0x%x, waiting for dialog...", initial_fg)
 
             send_keys("^r")   # Ctrl+R now safely goes to FL
 
