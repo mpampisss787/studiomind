@@ -232,3 +232,40 @@ def test_save_is_atomic(tmp_path: Path):
     # No leftover .tmp file after a clean save
     tmp_file = p.manifest_path.with_suffix(".json.tmp")
     assert not tmp_file.exists()
+
+
+def test_history_empty_initially(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    assert p.read_history() == ""
+    assert p.read_notes() == ""
+
+
+def test_history_append_and_read(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    p.append_history_entry("Cut 2dB at 320 Hz on Bass. LUFS -9.4 -> -9.7. User kept.")
+    p.append_history_entry("Added +1.5dB shelf at 10kHz on Master.")
+    history = p.read_history()
+    assert "# X" in history  # title line
+    assert "Cut 2dB at 320 Hz" in history
+    assert "shelf at 10kHz" in history
+    # Both entries have timestamp headers
+    assert history.count("## ") >= 2
+
+
+def test_history_tail_caps_old_entries(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    for i in range(30):
+        p.append_history_entry(f"entry-{i}")
+    # Default tail is 20 — oldest should be trimmed
+    history = p.read_history(max_entries=20)
+    assert "entry-29" in history
+    assert "entry-0" not in history
+    assert "entry-10" in history  # the 20th-from-last
+
+
+def test_notes_path_and_read(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    # notes.md lives at project root so user can edit it in plain editor
+    assert p.notes_path == p.root / "notes.md"
+    p.notes_path.write_text("- Genre: trap\n- Dark low-end", encoding="utf-8")
+    assert "Genre: trap" in p.read_notes()

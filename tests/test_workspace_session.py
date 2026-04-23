@@ -279,6 +279,28 @@ def test_watcher_prefers_specific_over_generic_slug(tmp_path: Path):
         sess.stop()
 
 
+def test_detect_external_changes_reports_diff(tmp_path: Path):
+    fl = FakeFL()
+    project = open_project("Demo", root=tmp_path)
+    sess = WorkspaceSession(fl, project, analyze_fn=_fake_analyze)
+
+    # Render two tracks; track 3 was rendered, track 5 never rendered
+    sess.prepare_stem(track_id=3)
+    sess.manifest.stems[3].status = STATUS_READY
+
+    # Track 5 exists in FL but no manifest entry yet — should show as "never rendered"
+    result = sess.detect_external_changes()
+    assert len(result["tracks_unchanged"]) == 1
+    assert result["tracks_unchanged"][0] == 3
+    assert any(t["track_id"] == 5 for t in result["tracks_never_rendered"])
+
+    # Now mutate track 3 externally (e.g., user changed volume in FL)
+    fl.tracks[3]["volume"] = 0.42
+    result = sess.detect_external_changes()
+    assert any(t["track_id"] == 3 for t in result["tracks_changed"])
+    assert 3 not in result["tracks_unchanged"]
+
+
 def test_refresh_staleness_flags_changed_track(tmp_path: Path):
     fl = FakeFL()
     project = open_project("Demo", root=tmp_path)

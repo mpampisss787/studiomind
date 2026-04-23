@@ -150,6 +150,9 @@ class Project:
     REFERENCES_DIR = "references"
     META_DIR = ".studiomind"
     MANIFEST_FILE = "session.json"
+    HISTORY_FILE = "history.md"
+    NOTES_FILE = "notes.md"
+    HISTORY_TAIL_ENTRIES = 20  # how many recent entries to expose to the agent
 
     def __init__(self, root: Path, name: str) -> None:
         self.root = root
@@ -174,6 +177,16 @@ class Project:
     @property
     def manifest_path(self) -> Path:
         return self.meta_dir / self.MANIFEST_FILE
+
+    @property
+    def history_path(self) -> Path:
+        return self.meta_dir / self.HISTORY_FILE
+
+    @property
+    def notes_path(self) -> Path:
+        """User-authored project notes (optional). Lives at project root so the
+        user can edit it in a plain editor without digging into .studiomind/."""
+        return self.root / self.NOTES_FILE
 
     def ensure_dirs(self) -> None:
         for d in (self.stems_dir, self.masters_dir, self.references_dir, self.meta_dir):
@@ -200,6 +213,50 @@ class Project:
     def stem_filename(self, track_id: int, track_name: str) -> str:
         """Deterministic filename for a stem. Zero-padded track id keeps dir sorted."""
         return f"track_{track_id:03d}_{slugify(track_name)}.wav"
+
+    # ── History / notes ──────────────────────────────────────────
+
+    def append_history_entry(self, entry: str, *, timestamp: float | None = None) -> str:
+        """Append a markdown entry with a UTC timestamp heading. Returns the header line."""
+        import datetime as _dt
+
+        self.ensure_dirs()
+        ts = _dt.datetime.fromtimestamp(
+            timestamp if timestamp is not None else time.time(), _dt.timezone.utc
+        )
+        header = f"## {ts.strftime('%Y-%m-%d %H:%M UTC')}"
+        # First write on a fresh project prepends a title
+        existing = ""
+        if self.history_path.exists():
+            existing = self.history_path.read_text(encoding="utf-8")
+        if not existing:
+            existing = f"# {self.name} — StudioMind history\n\n"
+
+        block = f"{header}\n{entry.strip()}\n\n"
+        self.history_path.write_text(existing + block, encoding="utf-8")
+        return header
+
+    def read_history(self, max_entries: int | None = None) -> str:
+        """Return the most-recent N history entries concatenated. Empty string if none."""
+        if not self.history_path.exists():
+            return ""
+        content = self.history_path.read_text(encoding="utf-8")
+        if max_entries is None:
+            max_entries = self.HISTORY_TAIL_ENTRIES
+        # Entries are delimited by "## " headings. Keep the top title (#) + last N entries.
+        parts = content.split("\n## ")
+        if len(parts) <= max_entries + 1:
+            return content
+        title_block = parts[0]
+        # parts[1:] are entries minus their leading "## "; restore it
+        tail = ["## " + p for p in parts[-max_entries:]]
+        return title_block + "\n" + "\n".join(tail)
+
+    def read_notes(self) -> str:
+        """Return user-authored notes.md contents, or empty string if absent."""
+        if not self.notes_path.exists():
+            return ""
+        return self.notes_path.read_text(encoding="utf-8")
 
     def master_filename(self, timestamp: float | None = None) -> str:
         """Timestamped master filename (history is kept)."""
@@ -526,6 +583,77 @@ class WorkspaceSession:
                 logger.warning("Un-solo failed for track %d: %s", rec.track_id, e)
 
         return self._build_collect_result(rec)
+
+    def detect_external_changes(self) -> dict:
+        """
+        Compare current FL state per mixer track to the fl_state_hash recorded
+        at each stem's last render. Reports which tracks were edited outside
+        StudioMind (e.g., user changed EQ in FL without involving the agent).
+
+        Returns:
+            {
+              "tracks_changed": [{"track_id": 3, "track_name": "Bass",
+                                   "last_seen_at": 1745..., "was_stale_before": false}],
+              "tracks_unchanged": [5, 7, ...],
+              "tracks_never_rendered": [{"track_id": 9, "track_name": "Guitar"}]
+            }
+        """
+        try:
+            state = self._fl.read_project_state()
+        except Exception as e:
+            return {"error": f"Could not read FL state: {e}"}
+
+        tracks_changed: list[dict] = []
+        tracks_unchanged: list[int] = []
+        tracks_never_rendered: list[dict] = []
+
+        # Build a set of existing stem track_ids in the manifest
+        with self._lock:
+            manifest_stems = dict(self._manifest.stems)
+
+        for t in state.get("mixer_tracks", []):
+            tid = t.get("index")
+            if tid is None or tid == 0:  # skip master here
+                continue
+            if not t.get("enabled", True):
+                continue
+
+            rec = manifest_stems.get(tid)
+            if rec is None or rec.fl_state_hash is None:
+                tracks_never_rendered.append(
+                    {"track_id": tid, "track_name": t.get("name") or ""}
+                )
+                continue
+
+            # Re-hash current track state (same function used at render-time)
+            try:
+                full = self._fl.read_mixer_track(tid)
+                current_hash = hash_track_state(full)
+            except Exception:
+                continue
+
+            if current_hash == rec.fl_state_hash:
+                tracks_unchanged.append(tid)
+            else:
+                tracks_changed.append(
+                    {
+                        "track_id": tid,
+                        "track_name": rec.track_name or t.get("name") or "",
+                        "last_seen_at": rec.rendered_at,
+                        "was_stale_before": rec.status == STATUS_STALE,
+                    }
+                )
+
+        return {
+            "tracks_changed": tracks_changed,
+            "tracks_unchanged": tracks_unchanged,
+            "tracks_never_rendered": tracks_never_rendered,
+            "summary": (
+                f"{len(tracks_changed)} track(s) changed externally, "
+                f"{len(tracks_unchanged)} unchanged, "
+                f"{len(tracks_never_rendered)} never rendered."
+            ),
+        }
 
     def refresh_staleness(self) -> list[int]:
         """

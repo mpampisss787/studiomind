@@ -329,6 +329,48 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "read_project_history",
+        "description": (
+            "Return the agent-maintained history.md for this project (last ~20 entries) "
+            "AND the user-authored notes.md if it exists. Call this ONCE at session start "
+            "so you remember what was done in prior sessions and any project-specific "
+            "instructions the user wrote. The history is cumulative across sessions."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "write_history_entry",
+        "description": (
+            "Append a short markdown entry to this project's history.md. Use this after "
+            "completing a meaningful change or at the end of a reasoning thread. Keep "
+            "entries concise — a few bullet lines or a short paragraph. Include concrete "
+            "numbers (LUFS, dB values, Hz) so future sessions can pick up cleanly.\n\n"
+            "Good entry: 'Cut 2.5dB at 320 Hz on track 3 (Bass) via Pro-Q 3 band 4. "
+            "Master LUFS -9.4 -> -9.7. User kept. Low-mid muddiness reduced.'"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "type": "string",
+                    "description": "Markdown content to append. No heading needed — the tool adds a timestamp header.",
+                },
+            },
+            "required": ["entry"],
+        },
+    },
+    {
+        "name": "detect_external_changes",
+        "description": (
+            "Compare the current FL project state to the snapshots StudioMind took at each "
+            "stem's last render. Reports which mixer tracks were edited in FL WITHOUT "
+            "StudioMind (between sessions, or while StudioMind wasn't running). Call this "
+            "at session start alongside read_project_history so you know what the user "
+            "changed on their own since you last worked together."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "refresh_staleness",
         "description": (
             "Re-check every rendered stem against the current FL mixer-track state. Any stem "
@@ -431,6 +473,9 @@ READ_ONLY_TOOLS = {
     "collect_render",
     "collect_all_renders",
     "refresh_staleness",
+    "read_project_history",
+    "write_history_entry",
+    "detect_external_changes",
 }
 
 
@@ -621,3 +666,27 @@ class ToolExecutor:
     def _exec_refresh_staleness(self, params: dict) -> Any:
         newly_stale = self._require_workspace().refresh_staleness()
         return {"ok": True, "newly_stale_track_ids": newly_stale}
+
+    def _exec_read_project_history(self, params: dict) -> Any:
+        ws = self._require_workspace()
+        history = ws.project.read_history()
+        notes = ws.project.read_notes()
+        return {
+            "ok": True,
+            "project_name": ws.project.name,
+            "history_markdown": history or "(no history yet — this is the first session)",
+            "notes_markdown": notes or "(no user notes.md)",
+            "has_history": bool(history),
+            "has_notes": bool(notes),
+        }
+
+    def _exec_write_history_entry(self, params: dict) -> Any:
+        ws = self._require_workspace()
+        entry = params.get("entry", "").strip()
+        if not entry:
+            return {"ok": False, "error": "entry is required"}
+        header = ws.project.append_history_entry(entry)
+        return {"ok": True, "timestamp": header, "path": str(ws.project.history_path)}
+
+    def _exec_detect_external_changes(self, params: dict) -> Any:
+        return self._require_workspace().detect_external_changes()
