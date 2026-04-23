@@ -728,56 +728,25 @@ class WorkspaceSession:
                 print("[AutoRender] Dialog config failed — sending Enter", flush=True)
                 send_keys("{ENTER}")
 
-            # ── STAGE 2: FL's render settings dialog ──────────────────
-            print("[AutoRender] STAGE 2: waiting for FL render settings dialog", flush=True)
+            # ── STAGE 2: FL's render settings dialog (if any) ──────────
+            # After Save As closes, FL MAY show a render settings dialog with
+            # Mode/Quality and a Start button. Rather than fight with complex
+            # window detection (the dialog often doesn't take foreground reliably),
+            # we just send Enter after a delay. Most dialogs default to the Start
+            # button, so Enter confirms. If no dialog, Enter to FL's main window
+            # is harmless.
+            print("[AutoRender] STAGE 2: Waiting for FL render settings (if any)", flush=True)
+            if self._interruptible_sleep(1.5, stop_event):
+                return True, "Save As closed, but stopped"
 
-            if self._interruptible_sleep(1.2, stop_event):
-                return True, "Save As closed, but stopped before clicking Start"
-
-            settings_dialog = None
-            print("[AutoRender] Polling for FL settings dialog (foreground change)...", flush=True)
-            for i in range(40):  # 4 seconds
-                if stop_event and stop_event.is_set():
-                    return True, "Saved but stopped before Start"
-                time.sleep(0.1)
-                fg = user32.GetForegroundWindow()
-                if fg and fg != hwnd and fg != dialog_hwnd:
-                    fg_pid2 = ctypes.c_ulong()
-                    user32.GetWindowThreadProcessId(fg, ctypes.byref(fg_pid2))
-                    if fg_pid2.value == fl_pid.value:
-                        settings_dialog = fg
-                        print(f"[AutoRender] STAGE 2: found foreground change on iter {i}: hwnd=0x{fg:x}", flush=True)
-                        break
-
-            if settings_dialog is None:
-                print(f"[AutoRender] STAGE 2: no new FL window in 4s — current fg=0x{user32.GetForegroundWindow():x}, FL main=0x{hwnd:x}, save_as=0x{dialog_hwnd:x}", flush=True)
-                return True, "Save As closed — no settings dialog detected"
-
-            print(f"[AutoRender] STAGE 2: settings dialog hwnd=0x{settings_dialog:x}", flush=True)
-            logger.info("FL render settings dialog: hwnd=0x%x", settings_dialog)
-
-            # Enumerate children and find the Start button
-            settings_children = _children(settings_dialog)
-            print(f"[AutoRender] STAGE 2: dialog has {len(settings_children)} children", flush=True)
-            for c in settings_children:
-                if c["cls"] in ("TQuickFocusBtn", "TButton", "Button") or c["text"]:
-                    print(f"  [settings] cls={c['cls']!r} text={c['text']!r} hwnd=0x{c['hwnd']:x}", flush=True)
-
-            BM_CLICK_LOCAL = 0x00F5
-            start_syns = {"start", "render", "begin", "go", "&start", "&render"}
-            clicked_start = False
-            for c in settings_children:
-                if c["text"].strip().lower() in start_syns:
-                    user32.SendMessageW(c["hwnd"], BM_CLICK_LOCAL, 0, 0)
-                    print(f"[AutoRender] STAGE 2: Clicked settings button: {c['text']!r}", flush=True)
-                    clicked_start = True
-                    break
-
-            if not clicked_start:
-                user32.SetForegroundWindow(settings_dialog)
-                time.sleep(0.2)
-                send_keys("{ENTER}")
-                print("[AutoRender] STAGE 2: No Start button matched — sent Enter", flush=True)
+            # Send Enter — confirms the Start button in FL's settings dialog if open
+            print("[AutoRender] STAGE 2: Sending Enter to click Start (default button)", flush=True)
+            send_keys("{ENTER}")
+            time.sleep(0.3)
+            # Belt-and-suspenders: send Enter a second time in case there's any
+            # additional confirmation dialog (e.g., "overwrite existing file?")
+            send_keys("{ENTER}")
+            logger.info("Stage 2: sent Enter twice to click Start / confirm")
 
             logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
             return True, "Export triggered automatically — watching for the file to land."
