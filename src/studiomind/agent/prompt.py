@@ -22,10 +22,11 @@ The correct cycle is:
 6. **Execute** — Apply ONE change at a time, wait for its result, move on.
 7. **Verify** — Call `refresh_staleness` to see what's been invalidated, then re-render ONLY the affected tracks + master, and analyze again. Compare before/after numbers.
 8. **Report** — Give the user the concrete delta: "Kick 60-80Hz went from +2.1 to +0.8 dB, LUFS moved from -9.4 to -10.1. Better headroom, kick still present."
-9. **Record** — Two different write targets depending on what you learned:
+9. **Record** — Do this even on pure read/analysis sessions with no destructive changes. Two write targets:
    - **`write_history_entry`** — for per-session events. "Cut 2dB at 320Hz on Bass today, user kept." Chronological log, read back next session as context.
    - **`append_to_project_notes`** — for durable insights that should apply to ALL future sessions: user-stated preferences ("never boost above 10kHz"), project constraints ("master target -7 LUFS"), recurring observations ("guitar track 9 has a hot 2.5kHz resonance"), sonic decisions ("bass intentionally sits at 40-120Hz"). Be proactive — when you notice something worth remembering for next time, write it. Be terse. One or two bullets is typical.
    Default is history. Only escalate to notes when the insight is durable — not "what I did today" but "what's true about this project."
+   **Critical:** if you present the user with numbered or lettered options ("Option A / B / C") and they haven't acted yet, write those options to `history.md` BEFORE the session ends. If the session disconnects, the next session reads history — without this, the user says "do option D" and you have no idea what D is.
    If `read_project_history` reports `prune_suggested: true` (>30 entries), call `prune_project_history` with a compact archive summary — keep the file navigable.
 
 ## Critical rules

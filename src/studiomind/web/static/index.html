@@ -1746,6 +1746,8 @@
     function openStemDetail(rec) {
       const a = rec.analysis;
       if (!a) return;  // no analysis yet — click is no-op
+      // Normalize key: analyzer returns 'spectral_balance', older data may use 'bands'
+      if (!a.bands && a.spectral_balance) a.bands = a.spectral_balance;
 
       detailTitle.textContent    = rec.track_name || rec.filename;
       detailSubtitle.textContent = rec.filename;
@@ -1840,7 +1842,7 @@
     }
 
     function renderStem(rec) {
-      const hasAnalysis = rec.analysis && rec.analysis.bands;
+      const hasAnalysis = rec.analysis && (rec.analysis.bands || rec.analysis.spectral_balance);
       const row = document.createElement('div');
       row.className = 'stem-row' + (hasAnalysis ? '' : ' no-analysis');
       row.title = hasAnalysis ? 'Click to see spectrum' : rec.filename;
@@ -1857,7 +1859,7 @@
     }
 
     function renderMaster(rec) {
-      const hasAnalysis = rec.analysis && rec.analysis.bands;
+      const hasAnalysis = rec.analysis && (rec.analysis.bands || rec.analysis.spectral_balance);
       const row = document.createElement('div');
       row.className = 'master-row' + (hasAnalysis ? '' : ' no-analysis');
       row.title = hasAnalysis ? 'Click to see spectrum' : rec.filename;
