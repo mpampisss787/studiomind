@@ -188,6 +188,20 @@ class AgentLoop:
             logger.warning("Compaction failed: %s — keeping full history", e)
             return messages
 
+        # Persist the summary to history.md BEFORE discarding the old turns.
+        # This is the safety net: if the connection drops right after compaction,
+        # the next session reads history.md and recovers this context instead of
+        # starting completely blind.
+        try:
+            workspace = getattr(self._executor, "_workspace", None)
+            if workspace is not None:
+                workspace.project.append_history_entry(
+                    "[Auto-saved on context compaction]\n\n" + summary
+                )
+                logger.info("Compaction summary saved to history.md")
+        except Exception as e:
+            logger.debug("Could not save compaction to history.md: %s", e)
+
         compacted = [
             {
                 "role": "user",
