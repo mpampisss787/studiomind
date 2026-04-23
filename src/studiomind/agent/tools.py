@@ -658,6 +658,7 @@ class ToolExecutor:
             track_id=params.get("track_id"),
             filename=params.get("filename"),
             timeout_s=params.get("timeout_s"),
+            stop_event=self._stop_event,
         )
 
     def _exec_collect_all_renders(self, params: dict) -> Any:

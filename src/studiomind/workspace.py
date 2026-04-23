@@ -743,6 +743,7 @@ class WorkspaceSession:
         track_id: int | None = None,
         filename: str | None = None,
         timeout_s: float | None = None,
+        stop_event: threading.Event | None = None,
     ) -> dict:
         """
         Block until the matching pending render is READY, analyze it, and return.
@@ -754,6 +755,8 @@ class WorkspaceSession:
         deadline = time.monotonic() + timeout
 
         while time.monotonic() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                raise RuntimeError("Stopped by user during render wait.")
             rec = self._find_record(track_id=track_id, filename=filename)
             if rec is None:
                 raise ValueError(
