@@ -487,6 +487,7 @@ class WorkspaceSession:
 
         try:
             import ctypes
+            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
 
             desktop = Desktop(backend="uia")
             fl_wins = [
@@ -496,39 +497,37 @@ class WorkspaceSession:
             if not fl_wins:
                 return False, "FL Studio window not found"
 
-            hwnd = fl_wins[0].handle
+            fl_win = fl_wins[0]
+
+            # FL uses low-level input hooks and ignores PostMessage for shortcuts,
+            # so we must use global SendInput / send_keys. The risk was Ctrl+R
+            # hitting the browser instead of FL. We prevent that by:
+            # 1. Finding the Python console / taskbar window and confirming it's
+            #    not focused (belt-and-suspenders)
+            # 2. Explicitly setting FL as foreground via SetForegroundWindow (WIN32)
+            #    rather than pywinauto set_focus which can be unreliable
+            # 3. Waiting long enough for the focus to propagate before sending keys
+
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            hwnd = fl_win.handle
 
-            WM_KEYDOWN = 0x0100
-            WM_KEYUP   = 0x0101
-            VK_CONTROL = 0x11
-            VK_R       = 0x52
-            VK_RETURN  = 0x0D
+            # Force FL to foreground using Win32 directly
+            user32.ShowWindow(hwnd, 9)   # SW_RESTORE (un-minimise if needed)
+            user32.SetForegroundWindow(hwnd)
+            time.sleep(0.6)  # Windows focus propagation delay
 
-            # Post Ctrl+R directly to FL's message queue — never touches global focus,
-            # the browser cannot intercept it.
-            user32.PostMessageW(hwnd, WM_KEYDOWN, VK_CONTROL, 0)
-            time.sleep(0.05)
-            user32.PostMessageW(hwnd, WM_KEYDOWN, VK_R, 0)
-            time.sleep(0.05)
-            user32.PostMessageW(hwnd, WM_KEYUP, VK_R, 0)
-            user32.PostMessageW(hwnd, WM_KEYUP, VK_CONTROL, 0)
+            # Confirm FL actually has focus before sending keys
+            fg = user32.GetForegroundWindow()
+            if fg != hwnd:
+                logger.warning("FL did not take foreground (fg=%s, fl=%s) — aborting auto-render", fg, hwnd)
+                return False, "Could not bring FL Studio to foreground — please export manually"
 
-            time.sleep(2.0)  # wait for FL's export dialog to open
+            send_keys("^r")   # Ctrl+R now safely goes to FL (it's the foreground window)
+            time.sleep(2.0)   # wait for export dialog
 
-            # Find the dialog FL opened and post Enter to it
-            dialog_hwnd = None
-            for w in desktop.windows():
-                title = (w.window_text() or "").lower()
-                if any(kw in title for kw in ("export", "render", "save")):
-                    dialog_hwnd = w.handle
-                    break
+            send_keys("{ENTER}")  # confirm dialog
 
-            target = dialog_hwnd if dialog_hwnd else hwnd
-            user32.PostMessageW(target, WM_KEYDOWN, VK_RETURN, 0)
-            user32.PostMessageW(target, WM_KEYUP,   VK_RETURN, 0)
-
-            logger.info("Auto-render triggered via PostMessage — no global keyboard")
+            logger.info("Auto-render triggered via SetForegroundWindow + send_keys")
             return True, "Export triggered automatically — watching for the file to land."
         except Exception as e:
             return False, f"Auto-render failed ({e}) — please export manually"
