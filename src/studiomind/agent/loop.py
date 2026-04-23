@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -106,12 +107,17 @@ class AgentLoop:
                 "environment variable, or save one in the web UI settings."
             )
         self._client = anthropic.Anthropic(api_key=api_key)
-        self._executor = ToolExecutor(fl, workspace=workspace)
+        self._stop_event = threading.Event()
+        self._executor = ToolExecutor(fl, workspace=workspace, stop_event=self._stop_event)
         self._action_log = ActionLog()
 
     @property
     def action_log(self) -> ActionLog:
         return self._action_log
+
+    def request_stop(self) -> None:
+        """Signal the agent to stop at the next check point (between turns and inside blocking tools)."""
+        self._stop_event.set()
 
     def run(self, user_goal: str, continue_conversation: bool = False) -> str:
         """
@@ -125,6 +131,7 @@ class AgentLoop:
             The agent's final text response (summary of what was done)
         """
         self._action_log = ActionLog()
+        self._stop_event.clear()
 
         system = build_system_prompt()
 
@@ -144,6 +151,11 @@ class AgentLoop:
         final_text = ""
 
         for turn in range(self._config.max_turns):
+            if self._stop_event.is_set():
+                logger.info("Agent stopped by user at turn %d", turn + 1)
+                if self._config.on_message:
+                    self._config.on_message("[Stopped by user.]")
+                break
             logger.info("Agent turn %d/%d", turn + 1, self._config.max_turns)
 
             response = self._api_call_with_retry(system, tools, messages)

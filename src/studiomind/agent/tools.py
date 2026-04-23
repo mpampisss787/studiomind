@@ -8,6 +8,7 @@ Each tool has:
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from studiomind.bridge.commands import FLStudio
@@ -436,9 +437,15 @@ READ_ONLY_TOOLS = {
 class ToolExecutor:
     """Executes tool calls by dispatching to FLStudio commands or local analysis."""
 
-    def __init__(self, fl: FLStudio, workspace: WorkspaceSession | None = None) -> None:
+    def __init__(
+        self,
+        fl: FLStudio,
+        workspace: WorkspaceSession | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         self._fl = fl
         self._workspace = workspace
+        self._stop_event = stop_event or threading.Event()
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> Any:
         """Execute a tool call and return the result."""
@@ -566,6 +573,13 @@ class ToolExecutor:
         collected_ids: set[tuple[str, object]] = set()
 
         while _time.monotonic() < deadline:
+            if self._stop_event.is_set():
+                return {
+                    "ok": False,
+                    "error": "stopped",
+                    "reason": "User cancelled the wait.",
+                    "collected": results,
+                }
             status = workspace.status()
             pending_stems = [s for s in status["stems"] if s["status"] == "pending"]
             pending_masters = [m for m in status["masters"] if m["status"] == "pending"]

@@ -380,20 +380,58 @@
       word-break: break-all;
     }
 
-    /* Thinking indicator */
+    /* Agent status strip (below messages, above input). Replaces the thin
+       'Thinking...' indicator with a richer state readout + Stop button. */
     .thinking {
       display: none;
       max-width: 800px;
       width: 100%;
       margin: 0 auto;
-      padding: 12px 0;
+      padding: 10px 14px;
       color: var(--text-muted);
-      font-size: 14px;
+      font-size: 13px;
       align-items: center;
       gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
     }
 
     .thinking.active { display: flex; }
+
+    .thinking[data-state="thinking"] { color: var(--text-muted); }
+    .thinking[data-state="tool"]     { color: var(--accent); border-color: var(--tool-border); }
+    .thinking[data-state="waiting"]  { color: #eab308; border-color: #eab30855; }
+    .thinking[data-state="done"]     { color: var(--success); border-color: #22c55e55; }
+    .thinking[data-state="error"]    { color: var(--error); border-color: #ef444455; }
+    .thinking[data-state="stopping"] { color: var(--error); border-color: #ef444455; }
+
+    .thinking .status-label {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .thinking .stop-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .thinking .stop-btn:hover {
+      background: var(--error);
+      color: white;
+      border-color: var(--error);
+    }
+    .thinking[data-state="done"] .stop-btn,
+    .thinking[data-state="error"] .stop-btn,
+    .thinking[data-state="stopping"] .stop-btn { display: none; }
 
     .thinking-dots span {
       display: inline-block;
@@ -673,9 +711,10 @@
       </div>
     </div>
 
-    <div class="thinking" id="thinking">
+    <div class="thinking" id="thinking" data-state="idle">
       <div class="thinking-dots"><span></span><span></span><span></span></div>
-      <span>Thinking...</span>
+      <span class="status-label" id="statusLabel">Thinking...</span>
+      <button class="stop-btn" id="stopBtn">Stop</button>
     </div>
   </div>
 
@@ -790,6 +829,54 @@
     let isProcessing = false;
     let currentToolEl = null;
     let configured = false;
+
+    // ─── Agent state strip ─────────────────────────────────────────
+    const statusLabel = document.getElementById('statusLabel');
+    const stopBtn = document.getElementById('stopBtn');
+
+    // Tool name -> friendly state + label. Lets us call out blocking waits.
+    const TOOL_LABELS = {
+      'get_workspace_status':  { state: 'tool',    label: 'Checking workspace...' },
+      'read_project_state':    { state: 'tool',    label: 'Reading project state...' },
+      'read_mixer_track':      { state: 'tool',    label: 'Reading mixer track...' },
+      'read_channel':          { state: 'tool',    label: 'Reading channel...' },
+      'analyze_audio':         { state: 'tool',    label: 'Analyzing audio...' },
+      'prepare_batch_render':  { state: 'tool',    label: 'Queueing batch render...' },
+      'prepare_stem_render':   { state: 'tool',    label: 'Queueing stem render...' },
+      'prepare_master_render': { state: 'tool',    label: 'Queueing master render...' },
+      'collect_render':        { state: 'waiting', label: 'Waiting for your export...' },
+      'collect_all_renders':   { state: 'waiting', label: 'Waiting for your batch export...' },
+      'refresh_staleness':     { state: 'tool',    label: 'Checking render freshness...' },
+      'snapshot':              { state: 'tool',    label: 'Saving FL snapshot...' },
+      'revert':                { state: 'tool',    label: 'Reverting last change...' },
+      'set_builtin_eq':        { state: 'tool',    label: 'Applying EQ...' },
+      'set_proq3':             { state: 'tool',    label: 'Applying Pro-Q 3 band...' },
+      'set_plugin_param':      { state: 'tool',    label: 'Applying plugin change...' },
+      'set_mixer_volume':      { state: 'tool',    label: 'Adjusting volume...' },
+      'set_mixer_pan':         { state: 'tool',    label: 'Adjusting pan...' },
+    };
+
+    let doneTimer = null;
+
+    function setAgentState(state, label) {
+      clearTimeout(doneTimer);
+      thinking.dataset.state = state;
+      statusLabel.textContent = label;
+      if (state === 'idle') {
+        thinking.classList.remove('active');
+      } else {
+        thinking.classList.add('active');
+      }
+      if (state === 'done') {
+        doneTimer = setTimeout(() => setAgentState('idle', ''), 1500);
+      }
+    }
+
+    stopBtn.addEventListener('click', () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      setAgentState('stopping', 'Stopping...');
+      try { ws.send(JSON.stringify({ type: 'stop' })); } catch (e) {}
+    });
 
     // ─── Settings ────────────────────────────────────────────────
     async function fetchSettings() {
@@ -939,24 +1026,35 @@
           addMessage('system', data.content);
         }
         else if (data.type === 'assistant') {
-          thinking.classList.remove('active');
           addMessage('assistant', data.content);
+          // After assistant text, go back to "thinking" state — the agent
+          // may still be calling another tool on this turn.
+          if (isProcessing) setAgentState('thinking', 'Thinking...');
         }
         else if (data.type === 'tool_call') {
           currentToolEl = addToolCall(data.tool, data.input);
+          const info = TOOL_LABELS[data.tool] || { state: 'tool', label: `Running ${data.tool}...` };
+          setAgentState(info.state, info.label);
         }
         else if (data.type === 'tool_result') {
           if (currentToolEl) {
             addToolResult(currentToolEl, data.result);
             currentToolEl = null;
           }
+          setAgentState('thinking', 'Thinking...');
+        }
+        else if (data.type === 'stopping') {
+          setAgentState('stopping', data.content || 'Stopping...');
         }
         else if (data.type === 'error') {
-          thinking.classList.remove('active');
+          setAgentState('error', data.content);
           addMessage('error', data.content);
+          isProcessing = false;
+          sendBtn.disabled = false;
+          inputBox.focus();
         }
         else if (data.type === 'done') {
-          thinking.classList.remove('active');
+          setAgentState('done', 'Done');
           isProcessing = false;
           sendBtn.disabled = false;
           inputBox.focus();
@@ -992,7 +1090,7 @@
       inputBox.style.height = 'auto';
       isProcessing = true;
       sendBtn.disabled = true;
-      thinking.classList.add('active');
+      setAgentState('thinking', 'Thinking...');
       scrollToBottom();
     }
 

@@ -303,14 +303,39 @@ async def websocket_chat(ws: WebSocket):
 
                 agent_task = asyncio.create_task(run_agent())
 
-                while True:
-                    msg = await queue.get()
-                    if msg["type"] == "done":
+                # Concurrently: drain the agent's event queue and watch for a stop message
+                async def pump_queue():
+                    while True:
+                        msg = await queue.get()
                         await ws.send_json(msg)
-                        break
-                    await ws.send_json(msg)
+                        if msg["type"] == "done":
+                            return
 
-                await agent_task
+                async def watch_for_stop():
+                    """While the agent runs, read further WS frames. A 'stop' frame
+                    signals cancellation; anything else we just ignore (the UI
+                    shouldn't be sending new messages mid-turn)."""
+                    while True:
+                        frame = await ws.receive_json()
+                        if frame.get("type") == "stop":
+                            agent.request_stop()
+                            await queue.put({"type": "stopping", "content": "Stopping..."})
+                            return
+
+                pump_task = asyncio.create_task(pump_queue())
+                stop_task = asyncio.create_task(watch_for_stop())
+
+                done, pending = await asyncio.wait(
+                    {pump_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                # Whichever task didn't finish, cancel it
+                for t in pending:
+                    t.cancel()
+                # Let the agent wrap up naturally so the conversation history stays consistent
+                try:
+                    await agent_task
+                except Exception:
+                    pass
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
