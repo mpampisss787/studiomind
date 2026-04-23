@@ -645,10 +645,8 @@ class WorkspaceSession:
 
             # initial_fg must be set AFTER FL is the foreground window.
             initial_fg = user32.GetForegroundWindow()
-            print(f"[AutoRender] FL hwnd=0x{initial_fg:x} — pressing Ctrl+R", flush=True)
-            logger.info("FL in foreground hwnd=0x%x, waiting for dialog...", initial_fg)
-
-            send_keys("^r")
+            print(f"[AutoRender] FL hwnd=0x{initial_fg:x}", flush=True)
+            logger.info("FL in foreground hwnd=0x%x", initial_fg)
 
             def _children(hwnd: int) -> list[dict]:
                 info: list[dict] = []
@@ -689,16 +687,21 @@ class WorkspaceSession:
                             return fg
                 return None
 
-            # FL may show an internal dialog first (e.g. "Recording" panel) before
-            # the Windows Save As appears. We wait specifically for a dialog that
-            # has a Save/&Save button — that's definitively the file picker.
-            # Dismiss any stale Save As dialog left open from a previous attempt
-            stale = _wait_for_save_dialog(timeout_s=0.5)
-            if stale:
-                from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+            # BEFORE pressing Ctrl+R, check if there's already a stale Save As
+            # dialog open from a previous failed attempt. Check the CURRENT
+            # foreground (don't poll — just look at the state right now).
+            fg_now = user32.GetForegroundWindow()
+            if fg_now != initial_fg and _is_save_dialog(fg_now):
+                print(f"[AutoRender] Stale dialog open (0x{fg_now:x}) — dismissing", flush=True)
+                logger.info("Stale dialog detected, dismissing with Escape")
                 send_keys("{ESCAPE}")
-                print(f"[AutoRender] Dismissed stale dialog hwnd=0x{stale:x}", flush=True)
+                time.sleep(0.5)
+                # Re-focus FL for the Ctrl+R
+                user32.SetForegroundWindow(hwnd)
                 time.sleep(0.3)
+
+            print("[AutoRender] Pressing Ctrl+R to open export dialog", flush=True)
+            send_keys("^r")
 
             print("[AutoRender] Waiting for Windows Save As dialog...", flush=True)
             dialog_hwnd = _wait_for_save_dialog(timeout_s=8.0)
