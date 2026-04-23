@@ -360,6 +360,36 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "append_to_project_notes",
+        "description": (
+            "Append a durable insight to the project's notes.md. Use this for facts "
+            "that should apply to ALL future sessions of this project, not per-session "
+            "events (those go in write_history_entry).\n\n"
+            "Good candidates:\n"
+            "- User-stated preferences that persist ('never boost above 10kHz')\n"
+            "- Project-specific constraints ('master target -7 LUFS')\n"
+            "- Recurring observations ('track 9 guitar has hot 2.5kHz resonance — check every session')\n"
+            "- Sonic decisions that should stick ('bass sits 40-120 Hz, sub-bass below is intentional')\n"
+            "- References/targets ('matches Travis Scott Goosebumps tonal balance')\n\n"
+            "NOT for:\n"
+            "- One-off changes ('cut 2dB at 320Hz on bass today') — those go in write_history_entry\n"
+            "- Transient state (current staleness, pending renders) — that's in session.json\n\n"
+            "Append-only — the user can prune by hand later. Be terse and opinionated. One "
+            "or two bullet points is typical. Use markdown — a '## Observations' heading is "
+            "appropriate on the first entry, not on every entry."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "type": "string",
+                    "description": "Markdown content to append to notes.md. The tool preserves everything already in the file.",
+                },
+            },
+            "required": ["entry"],
+        },
+    },
+    {
         "name": "detect_external_changes",
         "description": (
             "Compare the current FL project state to the snapshots StudioMind took at each "
@@ -475,6 +505,7 @@ READ_ONLY_TOOLS = {
     "refresh_staleness",
     "read_project_history",
     "write_history_entry",
+    "append_to_project_notes",
     "detect_external_changes",
 }
 
@@ -687,6 +718,14 @@ class ToolExecutor:
             return {"ok": False, "error": "entry is required"}
         header = ws.project.append_history_entry(entry)
         return {"ok": True, "timestamp": header, "path": str(ws.project.history_path)}
+
+    def _exec_append_to_project_notes(self, params: dict) -> Any:
+        ws = self._require_workspace()
+        entry = params.get("entry", "").strip()
+        if not entry:
+            return {"ok": False, "error": "entry is required"}
+        ws.project.append_notes_entry(entry)
+        return {"ok": True, "path": str(ws.project.notes_path)}
 
     def _exec_detect_external_changes(self, params: dict) -> Any:
         return self._require_workspace().detect_external_changes()

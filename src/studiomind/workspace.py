@@ -253,10 +253,31 @@ class Project:
         return title_block + "\n" + "\n".join(tail)
 
     def read_notes(self) -> str:
-        """Return user-authored notes.md contents, or empty string if absent."""
+        """Return notes.md contents (user- or agent-authored), or empty if absent."""
         if not self.notes_path.exists():
             return ""
         return self.notes_path.read_text(encoding="utf-8")
+
+    def append_notes_entry(self, entry: str) -> None:
+        """
+        Append an agent-authored insight to notes.md. Append-only — agent
+        never rewrites existing content, which means the user's manual notes
+        (and previous agent observations) are safe. The user can always
+        hand-edit notes.md to prune stale entries.
+
+        First write on a fresh project seeds the file with a title so the
+        structure is predictable.
+        """
+        self.ensure_dirs()
+        existing = ""
+        if self.notes_path.exists():
+            existing = self.notes_path.read_text(encoding="utf-8")
+        if not existing.strip():
+            existing = f"# {self.name} — Project notes\n\n"
+        # Ensure separation from whatever came before
+        if not existing.endswith("\n\n"):
+            existing = existing.rstrip() + "\n\n"
+        self.notes_path.write_text(existing + entry.strip() + "\n", encoding="utf-8")
 
     def master_filename(self, timestamp: float | None = None) -> str:
         """Timestamped master filename (history is kept)."""

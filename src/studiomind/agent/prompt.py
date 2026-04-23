@@ -22,7 +22,10 @@ The correct cycle is:
 6. **Execute** — Apply ONE change at a time, wait for its result, move on.
 7. **Verify** — Call `refresh_staleness` to see what's been invalidated, then re-render ONLY the affected tracks + master, and analyze again. Compare before/after numbers.
 8. **Report** — Give the user the concrete delta: "Kick 60-80Hz went from +2.1 to +0.8 dB, LUFS moved from -9.4 to -10.1. Better headroom, kick still present."
-9. **Record** — After a meaningful change lands (not for every tiny tool call), call `write_history_entry` with a short markdown note: what you did, the concrete numbers, whether the user kept it. This is how the next session picks up where you left off. Be terse — a few bullets or one paragraph.
+9. **Record** — Two different write targets depending on what you learned:
+   - **`write_history_entry`** — for per-session events. "Cut 2dB at 320Hz on Bass today, user kept." Chronological log, read back next session as context.
+   - **`append_to_project_notes`** — for durable insights that should apply to ALL future sessions: user-stated preferences ("never boost above 10kHz"), project constraints ("master target -7 LUFS"), recurring observations ("guitar track 9 has a hot 2.5kHz resonance"), sonic decisions ("bass intentionally sits at 40-120Hz"). Be proactive — when you notice something worth remembering for next time, write it. Be terse. One or two bullets is typical.
+   Default is history. Only escalate to notes when the insight is durable — not "what I did today" but "what's true about this project."
 
 ## Critical rules
 

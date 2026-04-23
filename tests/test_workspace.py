@@ -269,3 +269,24 @@ def test_notes_path_and_read(tmp_path: Path):
     assert p.notes_path == p.root / "notes.md"
     p.notes_path.write_text("- Genre: trap\n- Dark low-end", encoding="utf-8")
     assert "Genre: trap" in p.read_notes()
+
+
+def test_append_notes_seeds_title_on_first_write(tmp_path: Path):
+    p = open_project("Demo", root=tmp_path)
+    p.append_notes_entry("- Master target: -7 LUFS")
+    content = p.read_notes()
+    assert content.startswith("# Demo")  # title seeded on first write
+    assert "-7 LUFS" in content
+
+
+def test_append_notes_preserves_existing_user_content(tmp_path: Path):
+    p = open_project("X", root=tmp_path)
+    # User pre-writes some notes
+    p.notes_path.write_text("# My project\n\n- Don't touch the kick\n", encoding="utf-8")
+    # Agent appends
+    p.append_notes_entry("## Agent observations\n- Guitar has hot 2.5kHz resonance")
+    content = p.read_notes()
+    assert "Don't touch the kick" in content  # user content preserved
+    assert "hot 2.5kHz" in content             # agent content added
+    # Agent content comes AFTER user content
+    assert content.index("Don't touch") < content.index("hot 2.5kHz")
