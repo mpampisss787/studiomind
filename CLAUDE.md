@@ -7,9 +7,9 @@
 | Key | Value |
 |-----|-------|
 | **Project Dir** | `~/studiomind` |
-| **Status** | Core infrastructure complete — needs Windows FL Studio testing |
-| **Target DAW** | FL Studio (Windows) |
-| **Stack** | Python CLI · Claude API (Sonnet/Opus) · SysEx over virtual MIDI · FL Python device script |
+| **Status** | Live on Windows — ping + state round-trip verified over MS MIDI Services loopback |
+| **Target DAW** | FL Studio (Windows, x64 — also runs under Prism on Win11 ARM64) |
+| **Stack** | Python CLI · Claude API (Sonnet/Opus) · SysEx over MS MIDI Services loopback · FL Python device script |
 | **MVP Scope** | EQ-focused mixing agent (12 tools, Pro-Q 3 support) |
 | **Lines of Code** | ~2400 across 15 Python files |
 | **Tests** | 7 protocol tests passing |
@@ -20,9 +20,10 @@
 Python CLI / Agent Loop
   ├── Claude API (tool use) — plan → act → verify → iterate
   ├── Tool Executor — dispatches to FL bridge or local analysis
-  └── MIDI Client (python-rtmidi)
-        ↕ SysEx over loopMIDI virtual port
-FL Studio
+  └── MIDI Client (python-rtmidi)           <-- companion uses endpoint (A)
+        ↕ SysEx over MS MIDI Services Basic MIDI 1.0 Loopback
+        ↕ (cross-wired: A writes appear at B reads, and vice versa)
+FL Studio                                    <-- FL attaches to endpoint (B)
   └── device_StudioMind.py (MIDI Controller Script)
         ├── OnSysEx() → decode → dispatch → respond
         └── 13 command handlers (read/write/safety)
@@ -60,9 +61,10 @@ FL Studio
 - `add_plugin()` is NOT in FL API → use built-in 3-band EQ (`mixer.setEqGain/Frequency/Bandwidth`)
 - `render/bounce` is NOT in FL API → need pywinauto UI automation
 - MIDI notes not accessible from controller scripts → use PyFLP for offline parsing
-- FL Python has NO sockets, filesystem, or subprocess — SysEx over MIDI only
+- FL runs its MIDI scripts in a Python 3.12 **sub-interpreter**. That blocks `_ctypes`, `_socket.socket()` construction, and parts of `tempfile` (confirmed via `scripts/device_probe.py`). Named-pipe / TCP server inside FL is impossible. `os`, `threading`, `subprocess` import OK. Stick with SysEx.
 - Built-in EQ params are normalized 0.0-1.0 (gain 0.5 = unity/0dB)
 - VST `getParamCount` always returns 4240 — check param names to find real ones
+- loopMIDI / teVirtualMIDI driver fails to install on Win11 25H2 (kernel refuses signature). Use Microsoft MIDI Services + Basic MIDI 1.0 Loopback plugin (rc-3) instead — Microsoft-signed, zero third-party driver.
 
 ## Development Status
 
@@ -71,9 +73,19 @@ FL Studio
 3. ~~FL Device Script~~ — Complete, 13 commands
 4. ~~MIDI Client~~ — Complete, threaded async
 5. ~~Agent Loop~~ — Complete, Claude tool use + preview gate
-6. **Windows round-trip test** ← NEXT
-7. Vertical slice ("Cut 2dB at 300Hz on piano")
+6. ~~Windows round-trip test~~ — Live on Win11 25H2 ARM64 via MS MIDI Services loopback (2026-04-23)
+7. **Vertical slice ("Cut 2dB at 300Hz on piano")** ← NEXT
 8. Full MVP ("Mix this professionally")
+
+## Windows Setup (driver-free)
+
+1. Install **Microsoft MIDI Services Runtime + Tools** (rc-4) + **Basic MIDI 1.0 Loopback plugin** (rc-3) from `github.com/microsoft/MIDI/releases`. x64 installers run under Prism on ARM64.
+2. Enable **Windows Developer Mode** (`Settings → For developers`) before running the loopback installer — preview MSIX requires it.
+3. Open **Windows MIDI Settings** app → "Finish MIDI Setup" → defaults create `Default App Loopback (A)` / `(B)`.
+4. FL Studio: F10 → attach `Default App Loopback (B)` as both Input and Output with controller type `StudioMind Agent Bridge`, same port number on both rows.
+5. Install Python 3.12 **x64** (`python-3.12.x-amd64.exe` from python.org — winget may pick ARM64 which has no `python-rtmidi` wheels).
+6. `pip install -e .` → all x64 wheels resolve.
+7. `python -m studiomind ping`. Override endpoint names via `STUDIOMIND_MIDI_IN` / `STUDIOMIND_MIDI_OUT` env vars if you're on loopMIDI or renamed endpoints.
 
 ## DO NOT
 
