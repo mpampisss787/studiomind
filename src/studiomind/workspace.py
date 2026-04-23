@@ -520,16 +520,32 @@ class WorkspaceSession:
             user32 = ctypes.windll.user32  # type: ignore[attr-defined]
             hwnd = fl_win.handle
 
-            # Force FL to foreground using Win32 directly
-            user32.ShowWindow(hwnd, 9)   # SW_RESTORE (un-minimise if needed)
-            user32.SetForegroundWindow(hwnd)
+            # Windows blocks SetForegroundWindow for background processes.
+            # Workaround: AttachThreadInput temporarily joins this thread to FL's
+            # input queue, giving us permission to steal the foreground.
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            fg_hwnd     = user32.GetForegroundWindow()
+            my_tid      = kernel32.GetCurrentThreadId()
+            fl_tid      = user32.GetWindowThreadProcessId(hwnd, None)
+            fg_tid      = user32.GetWindowThreadProcessId(fg_hwnd, None)
+
+            user32.AttachThreadInput(my_tid, fg_tid, True)
+            user32.AttachThreadInput(my_tid, fl_tid, True)
+            try:
+                user32.ShowWindow(hwnd, 9)        # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                user32.BringWindowToTop(hwnd)
+            finally:
+                user32.AttachThreadInput(my_tid, fg_tid, False)
+                user32.AttachThreadInput(my_tid, fl_tid, False)
+
             if self._interruptible_sleep(0.6, stop_event):
                 return False, "Stopped by user"
 
             # Confirm FL actually has focus before sending keys
             fg = user32.GetForegroundWindow()
             if fg != hwnd:
-                logger.warning("FL did not take foreground — aborting auto-render")
+                logger.warning("FL did not take foreground after AttachThreadInput — aborting auto-render")
                 return False, "Could not bring FL Studio to foreground — please export manually"
 
             send_keys("^r")   # Ctrl+R now safely goes to FL
