@@ -488,21 +488,24 @@ class WorkspaceSession:
         """
         try:
             import ctypes
-            import ctypes.wintypes as wintypes
 
-            user32   = ctypes.windll.user32  # type: ignore[attr-defined]
-            path_str = str(output_dir).rstrip("\\") + "\\"
-            print(f"[AutoRender] Typing path into 0x{dialog_hwnd:x}: {path_str}", flush=True)
-            logger.info("Typing path into dialog 0x%x: %s", dialog_hwnd, path_str)
+            user32     = ctypes.windll.user32  # type: ignore[attr-defined]
+            WM_SETTEXT = 0x000C
+            BM_CLICK   = 0x00F5
+            path_str   = str(output_dir).rstrip("\\") + "\\"
 
-            # Log dialog children for diagnostics
+            print(f"[AutoRender] Setting path in Save As: {path_str}", flush=True)
+            logger.info("Configuring Save As 0x%x — path: %s", dialog_hwnd, path_str)
+
+            # Enumerate children once (re-using _children from _try_auto_render scope
+            # is not possible here, so inline the same pattern)
             child_info: list[dict] = []
             ChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
 
             def _enum(hwnd, _):
                 cls  = ctypes.create_unicode_buffer(128)
                 text = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, cls,  128)
+                user32.GetClassNameW(hwnd, cls, 128)
                 user32.GetWindowTextW(hwnd, text, 256)
                 child_info.append({"hwnd": hwnd, "cls": cls.value, "text": text.value})
                 return True
@@ -512,60 +515,41 @@ class WorkspaceSession:
                 print(f"  [child] cls={c['cls']!r} text={c['text']!r} hwnd=0x{c['hwnd']:x}", flush=True)
                 logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
 
-            # Define INPUT structures for SendInput
-            INPUT_KEYBOARD     = 1
-            KEYEVENTF_UNICODE  = 0x0004
-            KEYEVENTF_KEYUP    = 0x0002
-            VK_RETURN          = 0x0D
-            VK_CONTROL         = 0x11
-            VK_A               = 0x41
+            # ── Set the filename / folder path ─────────────────────────
+            # The Windows Save As has one or two Edit controls.  The filename
+            # field is always the FIRST 'Edit' child (NOT inside the address bar).
+            # We set the folder path: typing just a folder path + Enter navigates
+            # there; the second Enter (or Save click) confirms.
+            filename_edit = None
+            for c in child_info:
+                if c["cls"].lower() == "edit":
+                    filename_edit = c["hwnd"]
+                    break
 
-            class KEYBDINPUT(ctypes.Structure):
-                _fields_ = [
-                    ("wVk",         ctypes.c_ushort),
-                    ("wScan",       ctypes.c_ushort),
-                    ("dwFlags",     ctypes.c_ulong),
-                    ("time",        ctypes.c_ulong),
-                    ("dwExtraInfo", ctypes.c_ulong),
-                ]
-
-            class INPUT(ctypes.Structure):
-                _fields_ = [("type", ctypes.c_ulong), ("ki", KEYBDINPUT)]
-
-            def ki_down(vk=0, scan=0, flags=0):
-                return INPUT(INPUT_KEYBOARD, KEYBDINPUT(vk, scan, flags, 0, 0))
-
-            def ki_up(vk=0, scan=0, flags=0):
-                return INPUT(INPUT_KEYBOARD, KEYBDINPUT(vk, scan, flags | KEYEVENTF_KEYUP, 0, 0))
-
-            def send_inputs(*inputs):
-                arr = (INPUT * len(inputs))(*inputs)
-                user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
-
-            # Ctrl+A to select all in the filename field, then type the path
-            send_inputs(ki_down(VK_CONTROL), ki_down(VK_A))
-            send_inputs(ki_up(VK_A), ki_up(VK_CONTROL))
-            time.sleep(0.05)
-
-            # Type each character via Unicode SendInput
-            for ch in path_str:
-                code = ord(ch)
-                send_inputs(ki_down(scan=code, flags=KEYEVENTF_UNICODE))
-                send_inputs(ki_up(scan=code,  flags=KEYEVENTF_UNICODE))
+            if filename_edit:
+                user32.SendMessageW(filename_edit, WM_SETTEXT, 0, path_str)
+                print(f"[AutoRender] Set filename Edit (0x{filename_edit:x}) to: {path_str}", flush=True)
+                logger.info("Set filename edit 0x%x to %s", filename_edit, path_str)
+            else:
+                print("[AutoRender] No Edit control found — cannot set path", flush=True)
+                logger.warning("No Edit control in Save As dialog")
 
             time.sleep(0.1)
 
-            # Press Enter to confirm / navigate
-            send_inputs(ki_down(VK_RETURN))
-            send_inputs(ki_up(VK_RETURN))
-            time.sleep(0.3)
+            # ── Click &Save ────────────────────────────────────────────
+            save_synonyms = {"&save", "save", "&open", "start", "ok"}
+            for c in child_info:
+                if c["text"].strip().lower() in save_synonyms and c["cls"].lower() == "button":
+                    user32.SendMessageW(c["hwnd"], BM_CLICK, 0, 0)
+                    print(f"[AutoRender] Clicked {c['text']!r} (hwnd=0x{c['hwnd']:x})", flush=True)
+                    logger.info("Clicked %r", c["text"])
+                    return True
 
-            # Press Enter again to click Save/OK (some dialogs need two confirmations)
-            send_inputs(ki_down(VK_RETURN))
-            send_inputs(ki_up(VK_RETURN))
-
-            print("[AutoRender] Typed path + pressed Enter×2", flush=True)
-            logger.info("Typed path + pressed Enter×2")
+            # Fallback: press Enter
+            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
+            send_keys("{ENTER}")
+            print("[AutoRender] No Save button found — sent Enter as fallback", flush=True)
+            logger.info("Sent Enter fallback")
             return True
 
         except Exception as e:
@@ -655,35 +639,61 @@ class WorkspaceSession:
 
             send_keys("^r")
 
-            def _wait_for_new_fg(reference_hwnd: int, timeout_s: float = 5.0) -> int | None:
-                """Wait until GetForegroundWindow differs from reference_hwnd. Returns new hwnd."""
-                steps = int(timeout_s / 0.1)
-                for _ in range(steps):
+            def _children(hwnd: int) -> list[dict]:
+                info: list[dict] = []
+                Proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+
+                def _cb(h, _):
+                    cls  = ctypes.create_unicode_buffer(128)
+                    text = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(h, cls, 128)
+                    user32.GetWindowTextW(h, text, 256)
+                    info.append({"hwnd": h, "cls": cls.value, "text": text.value})
+                    return True
+
+                user32.EnumChildWindows(hwnd, Proc(_cb), 0)
+                return info
+
+            def _is_save_dialog(hwnd: int) -> bool:
+                """True if this hwnd is a Windows Save As file dialog."""
+                for c in _children(hwnd):
+                    if c["text"].strip().lower() in ("&save", "save", "&open"):
+                        return True
+                return False
+
+            def _wait_for_save_dialog(timeout_s: float = 8.0) -> int | None:
+                """Poll until a Windows Save As dialog appears (any foreground window with &Save)."""
+                deadline = time.monotonic() + timeout_s
+                seen: set[int] = set()
+                while time.monotonic() < deadline:
                     if stop_event and stop_event.is_set():
                         return None
-                    time.sleep(0.1)
+                    time.sleep(0.15)
                     fg = user32.GetForegroundWindow()
-                    if fg != reference_hwnd and fg != 0:
-                        print(f"[AutoRender] Foreground changed to hwnd=0x{fg:x}", flush=True)
-                        logger.info("Foreground changed to hwnd=0x%x", fg)
-                        return fg
+                    if fg and fg not in seen:
+                        seen.add(fg)
+                        if _is_save_dialog(fg):
+                            print(f"[AutoRender] Save As dialog found: hwnd=0x{fg:x}", flush=True)
+                            logger.info("Save As dialog found: hwnd=0x%x", fg)
+                            return fg
                 return None
 
-            # Stage 1: wait for any dialog/window that FL opens after Ctrl+R
-            dialog_hwnd = _wait_for_new_fg(initial_fg, timeout_s=5.0)
+            # FL may show an internal dialog first (e.g. "Recording" panel) before
+            # the Windows Save As appears. We wait specifically for a dialog that
+            # has a Save/&Save button — that's definitively the file picker.
+            print("[AutoRender] Waiting for Windows Save As dialog...", flush=True)
+            dialog_hwnd = _wait_for_save_dialog(timeout_s=8.0)
 
             if dialog_hwnd is None:
-                print("[AutoRender] No foreground change detected — sending Enter as fallback", flush=True)
-                logger.warning("No foreground change after Ctrl+R — pressing Enter fallback")
+                print("[AutoRender] Save As dialog not detected — trying Enter fallback", flush=True)
+                logger.warning("Save As dialog not detected after 8s")
                 send_keys("{ENTER}")
-                # Stage 2: Enter may have dismissed an internal FL dialog; wait for
-                # the Windows Save As that sometimes follows
-                dialog_hwnd = _wait_for_new_fg(initial_fg, timeout_s=4.0)
+                dialog_hwnd = _wait_for_save_dialog(timeout_s=4.0)
                 if dialog_hwnd is None:
-                    print("[AutoRender] Still no dialog — giving up", flush=True)
-                    return True, "Ctrl+R sent, Enter fallback used — no dialog detected"
+                    print("[AutoRender] Giving up — no Save As dialog appeared", flush=True)
+                    return True, "Ctrl+R sent but Save As dialog not detected"
 
-            print(f"[AutoRender] Dialog hwnd=0x{dialog_hwnd:x} — configuring", flush=True)
+            print(f"[AutoRender] Configuring dialog hwnd=0x{dialog_hwnd:x}", flush=True)
 
             # Give the dialog a moment to fully render
             if self._interruptible_sleep(0.4, stop_event):
