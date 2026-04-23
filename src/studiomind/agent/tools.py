@@ -676,6 +676,7 @@ class ToolExecutor:
         deadline = _time.monotonic() + timeout
 
         results: list[dict] = []
+        failures: list[dict] = []
         collected_ids: set[tuple[str, object]] = set()
 
         while _time.monotonic() < deadline:
@@ -685,6 +686,8 @@ class ToolExecutor:
                     "error": "stopped",
                     "reason": "User cancelled the wait.",
                     "collected": results,
+                    "failures": failures,
+                    "failed_count": len(failures),
                 }
             status = workspace.status()
             pending_stems = [s for s in status["stems"] if s["status"] == "pending"]
@@ -697,8 +700,6 @@ class ToolExecutor:
                 m for m in status["masters"]
                 if m["status"] == "ready" and ("master", m["filename"]) not in collected_ids
             ]
-
-            failures: list[dict] = []
 
             for s in ready_stems:
                 try:
@@ -741,6 +742,8 @@ class ToolExecutor:
                 "ok": False,
                 "error": "timeout",
                 "collected": results,
+                "failures": failures,
+                "failed_count": len(failures),
                 "still_pending": {
                     "stems": [s for s in workspace.status()["stems"] if s["status"] == "pending"],
                     "masters": [m for m in workspace.status()["masters"] if m["status"] == "pending"],
