@@ -62,12 +62,23 @@ One FL project maps to one StudioMind project folder, mirroring the FL project n
 - `session.json` is the single source of truth for "what audio do I have and is it still fresh." Agent reads it at session start; does not rely on chat-history memory.
 - Each render is tagged with a hash of the relevant FL state at render time. When FL state changes, stems whose track changed are flagged `stale` — agent refuses to trust stale analysis and re-renders.
 
-## MVP Tools (12)
+## MVP Tools
 
 **Read (safe):** `read_project_state`, `read_mixer_track`, `read_channel`, `analyze_audio`
-**Render (safe):** `render_and_analyze` (master, stem, or full_mix mode — triggers FL export via pywinauto)
+**Workspace (safe):** `get_workspace_status`, `refresh_staleness`
+**Render (user-assisted):** `prepare_batch_render` (preferred), `prepare_stem_render`, `prepare_master_render`, `collect_render`, `collect_all_renders`
 **Write (destructive — require snapshot):** `set_builtin_eq`, `set_proq3`, `set_plugin_param`, `set_mixer_volume`, `set_mixer_pan`
 **Safety:** `snapshot`, `revert`
+
+### Render flow
+
+The agent doesn't auto-render — FL's Python API doesn't expose export. Instead:
+1. Agent calls `prepare_batch_render` → solos/unsolos the right tracks, writes pending manifest entries.
+2. Agent speaks the instruction ("Ctrl+R → Tracks (separate audio files) → save into `stems/`").
+3. User does one FL export. File-watcher sees WAVs land, fuzzy-matches them to mixer tracks by slug.
+4. Agent calls `collect_all_renders` → blocks until every pending render is READY, returns analyses.
+
+This is the path for initial full-mix analysis. `prepare_stem_render` + `collect_render` is for targeted re-checks after a single change.
 
 ## FL Commands (14)
 
@@ -98,10 +109,11 @@ One FL project maps to one StudioMind project folder, mirroring the FL project n
 5. ~~Agent Loop~~ — Complete, Claude tool use + preview gate
 6. ~~Windows round-trip test~~ — Live on Win11 25H2 ARM64 via MS MIDI Services loopback (2026-04-23)
 7. ~~Workspace data model~~ — Project folders + session.json + staleness hashing (2026-04-23, 15 tests)
-8. **Render loop Phase 1b** — `request_render` tool, file watcher, user-assisted export ← NEXT
-9. Memory layer — user.json, decisions.json, gotchas.json
-10. Vertical slice ("Cut 2dB at 300Hz on piano")
-11. Full MVP ("Mix this professionally")
+8. ~~Render loop Phase 1b~~ — prepare_batch_render + file-watcher + collect_all_renders (2026-04-23, 44 tests)
+9. **Live end-to-end test on Windows** ← NEXT
+10. Memory + sample library — user.json, decisions.json, samples/ fingerprints
+11. Vertical slice ("Cut 2dB at 300Hz on piano")
+12. Full MVP ("Mix this professionally")
 
 ## Windows Setup (driver-free)
 

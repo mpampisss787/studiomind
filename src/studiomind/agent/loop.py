@@ -19,6 +19,7 @@ from studiomind.agent.tools import (
     ToolExecutor,
 )
 from studiomind.bridge.commands import FLStudio
+from studiomind.workspace import WorkspaceSession
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,11 @@ class AgentLoop:
         self,
         fl: FLStudio,
         config: AgentConfig | None = None,
+        workspace: WorkspaceSession | None = None,
     ) -> None:
         self._fl = fl
         self._config = config or AgentConfig()
+        self._workspace = workspace
         try:
             import anthropic
         except ImportError:
@@ -96,7 +99,7 @@ class AgentLoop:
                 "environment variable, or save one in the web UI settings."
             )
         self._client = anthropic.Anthropic(api_key=api_key)
-        self._executor = ToolExecutor(fl)
+        self._executor = ToolExecutor(fl, workspace=workspace)
         self._action_log = ActionLog()
 
     @property

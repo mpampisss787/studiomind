@@ -103,6 +103,30 @@ def cmd_project(args: argparse.Namespace) -> None:
     print(f"  manifest: {project.manifest_path}")
 
 
+def _open_active_workspace(fl: FLStudio) -> "WorkspaceSession":
+    """Detect the active FL project and return a started WorkspaceSession for it."""
+    from studiomind.fl_detect import detect_fl_project
+    from studiomind.workspace import WorkspaceSession, open_project, project_name_from_fl_path
+
+    fl_info = {}
+    try:
+        fl_info = fl.get_project_name()
+    except Exception:
+        pass
+
+    os_name, _ = detect_fl_project()
+    name = (
+        fl_info.get("name")
+        or project_name_from_fl_path(fl_info.get("path"))
+        or os_name
+        or "untitled"
+    )
+    project = open_project(name, fl_project_path=fl_info.get("path") or None)
+    session = WorkspaceSession(fl, project)
+    session.start()
+    return session
+
+
 def cmd_eq(args: argparse.Namespace) -> None:
     """Get or set EQ on a mixer track."""
     with FLStudio() as fl:
@@ -164,13 +188,16 @@ def cmd_agent(args: argparse.Namespace) -> None:
 
     print(f"Connecting to FL Studio...")
     with FLStudio() as fl:
-        print(f"Connected. Running agent with goal: {goal}\n")
-        agent = AgentLoop(fl, config)
+        workspace = _open_active_workspace(fl)
+        print(f"Connected. Project: {workspace.project.name}. Running agent with goal: {goal}\n")
+        agent = AgentLoop(fl, config, workspace=workspace)
         try:
             result = agent.run(goal)
         except KeyboardInterrupt:
             print("\n\nAgent interrupted by user.")
             result = None
+        finally:
+            workspace.stop()
 
         print(f"\n{agent.action_log.summary()}")
 
@@ -195,25 +222,29 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
     print("Connecting to FL Studio...")
     with FLStudio() as fl:
-        agent = AgentLoop(fl, config)
-        print("Connected. Chat with StudioMind (Ctrl+C to quit):\n")
-        first_message = True
-        while True:
-            try:
-                goal = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                break
-            if not goal:
-                continue
-            if goal.lower() in ("quit", "exit"):
-                break
-            try:
-                agent.run(goal, continue_conversation=not first_message)
-                first_message = False
-            except KeyboardInterrupt:
-                print("\n[Interrupted]")
-            except Exception as e:
-                print(f"\n[Error: {e}]")
+        workspace = _open_active_workspace(fl)
+        try:
+            agent = AgentLoop(fl, config, workspace=workspace)
+            print(f"Connected. Project: {workspace.project.name}. Chat with StudioMind (Ctrl+C to quit):\n")
+            first_message = True
+            while True:
+                try:
+                    goal = input("You: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    break
+                if not goal:
+                    continue
+                if goal.lower() in ("quit", "exit"):
+                    break
+                try:
+                    agent.run(goal, continue_conversation=not first_message)
+                    first_message = False
+                except KeyboardInterrupt:
+                    print("\n[Interrupted]")
+                except Exception as e:
+                    print(f"\n[Error: {e}]")
+        finally:
+            workspace.stop()
 
     print("\nDisconnected.")
 

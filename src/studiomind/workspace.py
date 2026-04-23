@@ -24,11 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 WORKSPACE_ROOT = Path.home() / "StudioMind" / "projects"
 
@@ -66,6 +70,18 @@ def hash_state(state: Any) -> str:
     """Stable 16-char hash of any JSON-serializable state. Used for staleness detection."""
     canon = json.dumps(state, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
+# Workflow-only fields on a mixer track that change during a session but don't
+# affect the rendered audio decision. Excluded from staleness hashes so that
+# soloing a track for rendering doesn't immediately flag its own render stale.
+_WORKFLOW_FIELDS = frozenset({"solo", "armed", "selected"})
+
+
+def hash_track_state(track_state: dict) -> str:
+    """Hash a mixer-track state for staleness, ignoring workflow-only fields."""
+    filtered = {k: v for k, v in track_state.items() if k not in _WORKFLOW_FIELDS}
+    return hash_state(filtered)
 
 
 @dataclass
@@ -205,6 +221,500 @@ class Project:
                 rec.status = STATUS_STALE
                 newly_stale.append(tid)
         return newly_stale
+
+
+class WorkspaceSession:
+    """
+    Stateful session around an active Project.
+
+    Responsibilities:
+      - Prepare pending renders (solo the track, write a pending manifest entry,
+        return a user-facing instruction).
+      - Run a background file-watcher that detects when a pending file lands
+        and flips it to READY.
+      - Block on collect() until a pending render is READY, then run audio
+        analysis, un-solo, and persist the analysis to the manifest.
+
+    Threading:
+      - All manifest mutations are guarded by a single lock.
+      - The watcher thread never calls into FLStudio (MIDI transport is serialized
+        through the agent thread only). FL state hashes are captured at
+        prepare-time, not at file-ready time.
+    """
+
+    WATCH_INTERVAL_S = 0.5
+    STABLE_POLLS_NEEDED = 2  # File size must be stable for this many polls
+    DEFAULT_COLLECT_TIMEOUT_S = 180.0
+
+    def __init__(
+        self,
+        fl: Any,  # FLStudio — loose type to avoid circular import
+        project: Project,
+        analyze_fn: Callable[[Path], dict] | None = None,
+    ) -> None:
+        self._fl = fl
+        self._project = project
+        self._manifest = project.load_manifest()
+        self._lock = threading.Lock()
+        self._watcher_stop = threading.Event()
+        self._watcher_thread: threading.Thread | None = None
+        # Track (path -> (last_size, stable_count)) for size-stability detection
+        self._pending_sizes: dict[str, tuple[int, int]] = {}
+        # Analyzer injection — defaults to studiomind.analyzer.spectral.analyze_audio
+        self._analyze_fn = analyze_fn
+
+    @property
+    def project(self) -> Project:
+        return self._project
+
+    @property
+    def manifest(self) -> Manifest:
+        return self._manifest
+
+    def start(self) -> None:
+        """Start the background file-watcher thread."""
+        if self._watcher_thread and self._watcher_thread.is_alive():
+            return
+        self._watcher_stop.clear()
+        self._watcher_thread = threading.Thread(
+            target=self._watch_loop, name="studiomind-watcher", daemon=True
+        )
+        self._watcher_thread.start()
+
+    def stop(self) -> None:
+        """Stop the watcher thread. Idempotent."""
+        self._watcher_stop.set()
+        if self._watcher_thread:
+            self._watcher_thread.join(timeout=2.0)
+        self._watcher_thread = None
+
+    def status(self) -> dict:
+        """Return a JSON-safe snapshot of the current workspace state."""
+        with self._lock:
+            stems = [rec.to_dict() for _tid, rec in sorted(self._manifest.stems.items())]
+            masters = [rec.to_dict() for rec in self._manifest.masters]
+        # Reference tracks are files physically present in references/
+        references = (
+            sorted(p.name for p in self._project.references_dir.iterdir() if p.is_file())
+            if self._project.references_dir.exists()
+            else []
+        )
+        return {
+            "project_name": self._project.name,
+            "root": str(self._project.root),
+            "fl_project_path": self._manifest.fl_project_path,
+            "stems_dir": str(self._project.stems_dir),
+            "masters_dir": str(self._project.masters_dir),
+            "stems": stems,
+            "masters": masters,
+            "references": references,
+        }
+
+    def prepare_stem(self, track_id: int) -> dict:
+        """Solo the track, write a pending stem entry, return the user instruction."""
+        track_state = self._fl.read_mixer_track(track_id)
+        track_name = track_state.get("name") or f"track_{track_id}"
+        filename = self._project.stem_filename(track_id, track_name)
+        full_path = self._project.stems_dir / filename
+        # Delete any stale copy so the watcher doesn't flip ready based on an old file
+        if full_path.exists():
+            try:
+                full_path.unlink()
+            except OSError as e:
+                logger.warning("Could not remove stale %s: %s", full_path, e)
+
+        # Solo the track. If this fails the pending entry is still written so
+        # the user can manually solo + render.
+        try:
+            self._fl.solo_track(track_id, solo=True)
+        except Exception as e:
+            logger.warning("solo_track failed for %d: %s", track_id, e)
+
+        state_hash = hash_track_state(track_state)
+
+        with self._lock:
+            self._manifest.stems[track_id] = RenderRecord(
+                kind=KIND_STEM,
+                filename=filename,
+                status=STATUS_PENDING,
+                track_id=track_id,
+                track_name=track_name,
+                fl_state_hash=state_hash,
+            )
+            self._project.save_manifest(self._manifest)
+
+        return {
+            "ok": True,
+            "pending": True,
+            "mode": "stem",
+            "track_id": track_id,
+            "track_name": track_name,
+            "filename": filename,
+            "full_path": str(full_path),
+            "stems_dir": str(self._project.stems_dir),
+            "instruction": (
+                f"Track {track_id} ({track_name}) is soloed in FL. "
+                f"In FL Studio: File -> Export -> WAV (or Ctrl+R), Start, and save as "
+                f"'{filename}' into the folder: {self._project.stems_dir}"
+            ),
+        }
+
+    def prepare_batch_render(self, include_master: bool = True) -> dict:
+        """
+        Write pending entries for every active mixer track (and optionally master)
+        so the user can do one FL batch export instead of 20 per-track renders.
+
+        Filenames produced by FL's 'Tracks as separate audio files' mode come from
+        the mixer track names. The watcher does fuzzy slug matching, so the user
+        doesn't have to rename anything — whatever FL writes gets bound to the
+        matching pending record.
+        """
+        try:
+            state = self._fl.read_project_state()
+        except Exception as e:
+            raise RuntimeError(f"Could not read FL project state: {e}") from e
+
+        # Un-solo every track so the batch renders reflect the full mix of each
+        for t in state.get("mixer_tracks", []):
+            if t.get("solo"):
+                try:
+                    self._fl.solo_track(t["index"], solo=False)
+                except Exception as e:
+                    logger.warning("Un-solo failed for %d: %s", t["index"], e)
+
+        tracks_prepared: list[dict] = []
+        with self._lock:
+            for t in state.get("mixer_tracks", []):
+                tid = t.get("index")
+                if tid is None or tid == 0:  # skip master (handled below via include_master)
+                    continue
+                if not t.get("enabled", True):
+                    continue
+                track_name = t.get("name") or f"track_{tid}"
+                canonical_filename = self._project.stem_filename(tid, track_name)
+
+                try:
+                    full = self._fl.read_mixer_track(tid)
+                    state_hash = hash_track_state(full)
+                except Exception:
+                    state_hash = None
+
+                self._manifest.stems[tid] = RenderRecord(
+                    kind=KIND_STEM,
+                    filename=canonical_filename,
+                    status=STATUS_PENDING,
+                    track_id=tid,
+                    track_name=track_name,
+                    fl_state_hash=state_hash,
+                )
+                tracks_prepared.append(
+                    {"track_id": tid, "track_name": track_name, "suggested_filename": canonical_filename}
+                )
+            self._project.save_manifest(self._manifest)
+
+        master_info = self.prepare_master() if include_master else None
+
+        return {
+            "ok": True,
+            "pending": True,
+            "mode": "batch",
+            "tracks_prepared": tracks_prepared,
+            "track_count": len(tracks_prepared),
+            "master_included": include_master,
+            "master": master_info,
+            "stems_dir": str(self._project.stems_dir),
+            "masters_dir": str(self._project.masters_dir),
+            "instruction": (
+                "Batch-render every track in one FL export:\n"
+                f"  1. File -> Export -> WAV\n"
+                f"  2. Set Mode to 'Tracks (separate audio files)'\n"
+                f"  3. Output folder: {self._project.stems_dir}\n"
+                f"  4. Start. FL will create one WAV per mixer track.\n"
+                f"Don't rename the files — I'll match them to tracks by name. "
+                f"{('Also export the master separately to: ' + str(self._project.masters_dir)) if include_master else ''}"
+            ).strip(),
+        }
+
+    def prepare_master(self) -> dict:
+        """Un-solo everything, write a pending master entry, return the user instruction."""
+        # Clear any solo state so the master reflects the full mix
+        try:
+            state = self._fl.read_project_state()
+            for t in state.get("mixer_tracks", []):
+                if t.get("solo"):
+                    try:
+                        self._fl.solo_track(t["index"], solo=False)
+                    except Exception as e:
+                        logger.warning("Un-solo failed for %d: %s", t["index"], e)
+        except Exception as e:
+            logger.warning("Could not read project state to un-solo: %s", e)
+
+        filename = self._project.master_filename()
+        full_path = self._project.masters_dir / filename
+        state_hash = hash_state(self._fl.read_project_state())
+
+        rec = RenderRecord(
+            kind=KIND_MASTER,
+            filename=filename,
+            status=STATUS_PENDING,
+            fl_state_hash=state_hash,
+        )
+        with self._lock:
+            self._manifest.masters.append(rec)
+            self._project.save_manifest(self._manifest)
+
+        return {
+            "ok": True,
+            "pending": True,
+            "mode": "master",
+            "filename": filename,
+            "full_path": str(full_path),
+            "masters_dir": str(self._project.masters_dir),
+            "instruction": (
+                f"All tracks are un-soloed. In FL Studio: File -> Export -> WAV (or "
+                f"Ctrl+R), Start, and save as '{filename}' into the folder: "
+                f"{self._project.masters_dir}"
+            ),
+        }
+
+    def collect(
+        self,
+        track_id: int | None = None,
+        filename: str | None = None,
+        timeout_s: float | None = None,
+    ) -> dict:
+        """
+        Block until the matching pending render is READY, analyze it, and return.
+
+        Identify the target by `track_id` (stem) or `filename` (either kind).
+        Un-solos the stem's track before returning so the mix is playable again.
+        """
+        timeout = timeout_s or self.DEFAULT_COLLECT_TIMEOUT_S
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            rec = self._find_record(track_id=track_id, filename=filename)
+            if rec is None:
+                raise ValueError(
+                    f"No pending render matches track_id={track_id!r} filename={filename!r}"
+                )
+            if rec.status == STATUS_READY and rec.analysis is None:
+                # Watcher flipped it ready; we still need to analyze
+                break
+            if rec.status == STATUS_READY and rec.analysis is not None:
+                # Already analyzed (e.g., a re-collect)
+                return self._build_collect_result(rec)
+            time.sleep(0.25)
+        else:
+            raise TimeoutError(
+                f"Render did not land within {timeout:.0f}s. "
+                f"track_id={track_id}, filename={filename}."
+            )
+
+        path = self._record_path(rec)
+        analysis_dict = self._run_analysis(path)
+
+        with self._lock:
+            rec.analysis = analysis_dict
+            self._project.save_manifest(self._manifest)
+
+        # Un-solo the track if this was a stem
+        if rec.kind == KIND_STEM and rec.track_id is not None:
+            try:
+                self._fl.solo_track(rec.track_id, solo=False)
+            except Exception as e:
+                logger.warning("Un-solo failed for track %d: %s", rec.track_id, e)
+
+        return self._build_collect_result(rec)
+
+    def refresh_staleness(self) -> list[int]:
+        """
+        Re-hash current FL state per track; flag stems whose track changed.
+
+        Returns the list of newly-stale track_ids.
+        """
+        try:
+            state = self._fl.read_project_state()
+        except Exception:
+            return []
+
+        # Per-track hash of the FULL mixer track state (plugins + volume + pan + eq)
+        current_hashes: dict[int, str] = {}
+        for t in state.get("mixer_tracks", []):
+            tid = t.get("index")
+            if tid is None:
+                continue
+            # Use read_mixer_track for the full detail (plugins + params)
+            try:
+                full = self._fl.read_mixer_track(tid)
+                current_hashes[tid] = hash_track_state(full)
+            except Exception:
+                continue
+
+        with self._lock:
+            newly_stale = self._project.mark_stale(self._manifest, current_hashes)
+            if newly_stale:
+                self._project.save_manifest(self._manifest)
+        return newly_stale
+
+    # ── internals ──────────────────────────────────────────────────────────
+
+    def _record_path(self, rec: RenderRecord) -> Path:
+        if rec.kind == KIND_STEM:
+            return self._project.stems_dir / rec.filename
+        return self._project.masters_dir / rec.filename
+
+    def _find_record(
+        self, track_id: int | None = None, filename: str | None = None
+    ) -> RenderRecord | None:
+        with self._lock:
+            if track_id is not None:
+                return self._manifest.stems.get(track_id)
+            if filename is not None:
+                rec = self._manifest.stems.get(-1)  # no-op
+                for r in self._manifest.stems.values():
+                    if r.filename == filename:
+                        return r
+                for r in self._manifest.masters:
+                    if r.filename == filename:
+                        return r
+        return None
+
+    def _build_collect_result(self, rec: RenderRecord) -> dict:
+        path = self._record_path(rec)
+        return {
+            "ok": True,
+            "filename": rec.filename,
+            "path": str(path),
+            "track_id": rec.track_id,
+            "track_name": rec.track_name,
+            "kind": rec.kind,
+            "rendered_at": rec.rendered_at,
+            "fl_state_hash": rec.fl_state_hash,
+            "analysis": rec.analysis,
+        }
+
+    def _run_analysis(self, path: Path) -> dict:
+        if self._analyze_fn is not None:
+            return self._analyze_fn(path)
+        from studiomind.analyzer.spectral import analyze_audio
+
+        return analyze_audio(path).to_dict()
+
+    def _watch_loop(self) -> None:
+        """Background poller: mark pending entries READY when their file lands and is stable."""
+        while not self._watcher_stop.is_set():
+            try:
+                self._poll_pending()
+            except Exception as e:
+                logger.exception("Watcher poll error: %s", e)
+            self._watcher_stop.wait(self.WATCH_INTERVAL_S)
+
+    def _poll_pending(self) -> None:
+        """
+        Match files in stems_dir / masters_dir to pending records.
+
+        Matching rules (in priority order, each record binds at most one file):
+          1. Exact filename match at the expected path.
+          2. Fuzzy slug match: the track's slug appears in the WAV's basename.
+             Longer slugs match first, so 'sub_bass' beats 'bass' for contested names.
+        When a file matches, we track its size across polls; once stable for
+        STABLE_POLLS_NEEDED polls, the record flips to READY.
+        """
+        with self._lock:
+            pending_stems = [rec for rec in self._manifest.stems.values() if rec.status == STATUS_PENDING]
+            pending_masters = [rec for rec in self._manifest.masters if rec.status == STATUS_PENDING]
+
+        if not pending_stems and not pending_masters:
+            self._pending_sizes.clear()
+            return
+
+        # Gather candidate files per directory
+        stem_wavs = (
+            [p for p in self._project.stems_dir.glob("*.wav") if p.is_file()]
+            if self._project.stems_dir.exists() else []
+        )
+        master_wavs = (
+            [p for p in self._project.masters_dir.glob("*.wav") if p.is_file()]
+            if self._project.masters_dir.exists() else []
+        )
+
+        # Sort pending records by slug length desc so specific names bind before generic ones
+        pending_stems_sorted = sorted(
+            pending_stems,
+            key=lambda r: len(slugify(r.track_name or "")),
+            reverse=True,
+        )
+
+        # Track which files are already claimed this poll
+        claimed_files: set[Path] = set()
+
+        def try_match(rec: RenderRecord, candidates: list[Path]) -> Path | None:
+            target_dir = self._project.stems_dir if rec.kind == KIND_STEM else self._project.masters_dir
+            exact = target_dir / rec.filename
+            if exact.exists() and exact not in claimed_files:
+                return exact
+            slug = slugify(rec.track_name or "") if rec.kind == KIND_STEM else "master"
+            if not slug:
+                return None
+            for wav in candidates:
+                if wav in claimed_files:
+                    continue
+                if slug in slugify(wav.stem):
+                    return wav
+            return None
+
+        changed = False
+
+        for rec in pending_stems_sorted:
+            matched = try_match(rec, stem_wavs)
+            if matched is None:
+                continue
+            claimed_files.add(matched)
+            if self._check_file_stable(matched):
+                with self._lock:
+                    rec.filename = matched.name  # bind to the actual name FL wrote
+                    rec.status = STATUS_READY
+                    rec.rendered_at = time.time()
+                    changed = True
+                logger.info("Stem ready: %s (track %s)", matched.name, rec.track_id)
+
+        for rec in pending_masters:
+            matched = try_match(rec, master_wavs)
+            if matched is None:
+                continue
+            claimed_files.add(matched)
+            if self._check_file_stable(matched):
+                with self._lock:
+                    rec.filename = matched.name
+                    rec.status = STATUS_READY
+                    rec.rendered_at = time.time()
+                    changed = True
+                logger.info("Master ready: %s", matched.name)
+
+        if changed:
+            with self._lock:
+                self._project.save_manifest(self._manifest)
+
+    def _check_file_stable(self, path: Path) -> bool:
+        """Return True once the file's size has been unchanged for STABLE_POLLS_NEEDED polls."""
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return False
+        if size == 0:
+            return False
+        key = str(path)
+        prev = self._pending_sizes.get(key)
+        if prev is None or prev[0] != size:
+            self._pending_sizes[key] = (size, 1)
+            return False
+        stable_count = prev[1] + 1
+        if stable_count >= self.STABLE_POLLS_NEEDED:
+            self._pending_sizes.pop(key, None)
+            return True
+        self._pending_sizes[key] = (size, stable_count)
+        return False
 
 
 def open_project(

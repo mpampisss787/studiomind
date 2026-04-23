@@ -133,7 +133,21 @@ async def websocket_chat(ws: WebSocket):
             on_tool_result=on_tool_result,
         )
 
-        agent = AgentLoop(fl, config)
+        # Open (or create) the active project workspace so render tools work
+        workspace = None
+        try:
+            from studiomind.cli import _open_active_workspace
+
+            workspace = _open_active_workspace(fl)
+            await ws.send_json(
+                {"type": "system", "content": f"Active project: {workspace.project.name}"}
+            )
+        except Exception as e:
+            await ws.send_json(
+                {"type": "system", "content": f"Project auto-detect failed ({e}); render tools will error until fixed."}
+            )
+
+        agent = AgentLoop(fl, config, workspace=workspace)
     except Exception as e:
         await ws.send_json({"type": "error", "content": f"Agent init failed: {e}"})
         try:
@@ -179,6 +193,11 @@ async def websocket_chat(ws: WebSocket):
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     finally:
+        try:
+            if workspace is not None:
+                workspace.stop()
+        except Exception:
+            pass
         try:
             fl.disconnect()
         except Exception:

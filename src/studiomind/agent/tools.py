@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from studiomind.bridge.commands import FLStudio
+from studiomind.workspace import WorkspaceSession
 
 # ═══════════════════════════════════════════════════════════════════
 # TOOL SCHEMAS (sent to Claude API)
@@ -227,36 +228,114 @@ TOOL_SCHEMAS = [
         },
     },
     {
-        "name": "render_and_analyze",
+        "name": "get_workspace_status",
         "description": (
-            "Render audio from FL Studio and analyze it. Supports three modes:\n"
-            "- 'master': Render the full mix.\n"
-            "- 'stem': Solo a specific mixer track, render it, then unsolo.\n"
-            "- 'full_mix': Render master + all active stems, detect frequency masking conflicts.\n"
-            "Returns spectral analysis, LUFS, peak, and masking data. "
-            "This is the primary 'verify' tool — use it after making EQ/volume changes "
-            "to confirm the mix improved."
+            "Return the current StudioMind project workspace: active project name, "
+            "all known stems and masters with their status (pending/ready/stale), "
+            "analysis data if available, and any reference tracks dropped into references/. "
+            "ALWAYS call this at the start of a session before asking for new renders — "
+            "existing fresh renders can be reused instead of re-rendered."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "prepare_batch_render",
+        "description": (
+            "PREFERRED for mixing work. Queues a batch render of every mixer track + "
+            "optionally the master in a SINGLE FL export. The user triggers ONE Ctrl+R "
+            "in 'Tracks (separate audio files)' mode and all stems land at once. "
+            "Use this when you need a complete picture of the mix to make decisions. "
+            "Returns an instruction string to speak to the user before calling wait_for_renders."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "mode": {
-                    "type": "string",
-                    "enum": ["master", "stem", "full_mix"],
-                    "description": "Render mode: 'master' for full mix, 'stem' for single track, 'full_mix' for all stems + masking analysis",
-                },
-                "track_id": {
-                    "type": "integer",
-                    "description": "Mixer track index (required for 'stem' mode, ignored otherwise)",
-                },
-                "track_ids": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Specific mixer track IDs for 'full_mix' mode (optional — defaults to all active tracks)",
+                "include_master": {
+                    "type": "boolean",
+                    "description": "Also queue a master render (default true)",
                 },
             },
-            "required": ["mode"],
         },
+    },
+    {
+        "name": "prepare_stem_render",
+        "description": (
+            "Queue a render for a SINGLE mixer track. Solos the track via MIDI and tells "
+            "the user which filename to export. Use this only for targeted re-checks after "
+            "making a change to one track — for initial analysis, prefer prepare_batch_render. "
+            "Returns an instruction string to speak to the user."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track_id": {
+                    "type": "integer",
+                    "description": "Mixer track index (0 is master; use 1+ for inserts)",
+                },
+            },
+            "required": ["track_id"],
+        },
+    },
+    {
+        "name": "prepare_master_render",
+        "description": (
+            "Queue a master render only. Un-solos any soloed tracks. Use this to verify the "
+            "full mix after changes. Returns an instruction string to speak to the user."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "collect_render",
+        "description": (
+            "BLOCKS until the requested render's file lands in the workspace, then analyzes it. "
+            "Call this AFTER telling the user what to export. Identify the target by track_id "
+            "(for a stem) or filename (for a master). Returns full audio analysis — LUFS, peak, "
+            "spectral balance, etc. — and un-solos the track if it was a stem."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track_id": {
+                    "type": "integer",
+                    "description": "Mixer track index — use this for stems",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Render filename — use this for masters or by-name lookup",
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "description": "Max seconds to wait (default 180)",
+                },
+            },
+        },
+    },
+    {
+        "name": "collect_all_renders",
+        "description": (
+            "Pairs with prepare_batch_render. BLOCKS until every pending render in the "
+            "workspace has landed and been analyzed, then returns the full set of analyses "
+            "at once. Use this after telling the user to do the batch export."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "timeout_s": {
+                    "type": "number",
+                    "description": "Max seconds to wait for the batch to complete (default 300)",
+                },
+            },
+        },
+    },
+    {
+        "name": "refresh_staleness",
+        "description": (
+            "Re-check every rendered stem against the current FL mixer-track state. Any stem "
+            "whose track has changed since the render (EQ, plugin, volume, etc.) gets flagged "
+            "'stale'. Call this after making destructive changes so you know which stems need "
+            "re-rendering before you trust their old analysis."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "set_proq3",
@@ -342,18 +421,24 @@ READ_ONLY_TOOLS = {
     "read_mixer_track",
     "read_channel",
     "analyze_audio",
-    "render_and_analyze",
     "snapshot",
     "revert",
+    "get_workspace_status",
+    "prepare_batch_render",
+    "prepare_stem_render",
+    "prepare_master_render",
+    "collect_render",
+    "collect_all_renders",
+    "refresh_staleness",
 }
 
 
 class ToolExecutor:
     """Executes tool calls by dispatching to FLStudio commands or local analysis."""
 
-    def __init__(self, fl: FLStudio, render_pipeline: Any | None = None) -> None:
+    def __init__(self, fl: FLStudio, workspace: WorkspaceSession | None = None) -> None:
         self._fl = fl
-        self._render = render_pipeline  # Optional RenderPipeline instance
+        self._workspace = workspace
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> Any:
         """Execute a tool call and return the result."""
@@ -441,27 +526,84 @@ class ToolExecutor:
             "shape": params.get("shape"),
         }
 
-    def _exec_render_and_analyze(self, params: dict) -> Any:
-        if self._render is None:
-            # Lazy-init if not provided
-            from studiomind.render.pipeline import RenderPipeline
-
-            self._render = RenderPipeline(self._fl)
-
-        mode = params["mode"]
-        if mode == "master":
-            result = self._render.render_master()
-            return result.to_dict()
-        elif mode == "stem":
-            track_id = params.get("track_id")
-            if track_id is None:
-                return {"error": "track_id is required for 'stem' mode"}
-            result = self._render.render_stem(track_id)
-            return result.to_dict()
-        elif mode == "full_mix":
-            track_ids = params.get("track_ids")
-            return self._render.analyze_mix(
-                stems=self._render.render_all_stems(track_ids) if track_ids else None,
+    def _require_workspace(self) -> WorkspaceSession:
+        if self._workspace is None:
+            raise RuntimeError(
+                "No active workspace. This session was started without a project — "
+                "run `studiomind project` first, or the agent shell did not initialize one."
             )
+        return self._workspace
+
+    def _exec_get_workspace_status(self, params: dict) -> Any:
+        return self._require_workspace().status()
+
+    def _exec_prepare_batch_render(self, params: dict) -> Any:
+        include_master = params.get("include_master", True)
+        return self._require_workspace().prepare_batch_render(include_master=include_master)
+
+    def _exec_prepare_stem_render(self, params: dict) -> Any:
+        return self._require_workspace().prepare_stem(track_id=params["track_id"])
+
+    def _exec_prepare_master_render(self, params: dict) -> Any:
+        return self._require_workspace().prepare_master()
+
+    def _exec_collect_render(self, params: dict) -> Any:
+        return self._require_workspace().collect(
+            track_id=params.get("track_id"),
+            filename=params.get("filename"),
+            timeout_s=params.get("timeout_s"),
+        )
+
+    def _exec_collect_all_renders(self, params: dict) -> Any:
+        """Wait for every pending render in the workspace, analyze them all, return as a list."""
+        import time as _time
+
+        workspace = self._require_workspace()
+        timeout = params.get("timeout_s", 300.0)
+        deadline = _time.monotonic() + timeout
+
+        results: list[dict] = []
+        collected_ids: set[tuple[str, object]] = set()
+
+        while _time.monotonic() < deadline:
+            status = workspace.status()
+            pending_stems = [s for s in status["stems"] if s["status"] == "pending"]
+            pending_masters = [m for m in status["masters"] if m["status"] == "pending"]
+            ready_stems = [
+                s for s in status["stems"]
+                if s["status"] == "ready" and ("stem", s["track_id"]) not in collected_ids
+            ]
+            ready_masters = [
+                m for m in status["masters"]
+                if m["status"] == "ready" and ("master", m["filename"]) not in collected_ids
+            ]
+
+            for s in ready_stems:
+                r = workspace.collect(track_id=s["track_id"], timeout_s=5.0)
+                results.append(r)
+                collected_ids.add(("stem", s["track_id"]))
+
+            for m in ready_masters:
+                r = workspace.collect(filename=m["filename"], timeout_s=5.0)
+                results.append(r)
+                collected_ids.add(("master", m["filename"]))
+
+            if not pending_stems and not pending_masters:
+                break
+            _time.sleep(0.5)
         else:
-            return {"error": f"Unknown render mode: {mode}"}
+            return {
+                "ok": False,
+                "error": "timeout",
+                "collected": results,
+                "still_pending": {
+                    "stems": [s for s in workspace.status()["stems"] if s["status"] == "pending"],
+                    "masters": [m for m in workspace.status()["masters"] if m["status"] == "pending"],
+                },
+            }
+
+        return {"ok": True, "count": len(results), "results": results}
+
+    def _exec_refresh_staleness(self, params: dict) -> Any:
+        newly_stale = self._require_workspace().refresh_staleness()
+        return {"ok": True, "newly_stale_track_ids": newly_stale}
