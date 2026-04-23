@@ -324,6 +324,92 @@
     .msg-assistant strong { color: #f5f5f5; }
     .msg-assistant ul, .msg-assistant ol { padding-left: 20px; margin-bottom: 8px; }
     .msg-assistant li { margin-bottom: 4px; }
+    .msg-assistant em { color: #d4d4d4; font-style: italic; }
+
+    /* Headings inside agent output */
+    .md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6 {
+      margin: 14px 0 6px 0;
+      font-weight: 600;
+      color: #f5f5f5;
+      line-height: 1.3;
+    }
+    .md-h1 { font-size: 20px; }
+    .md-h2 { font-size: 17px; }
+    .md-h3 { font-size: 15px; }
+    .md-h4, .md-h5, .md-h6 { font-size: 14px; color: var(--text); }
+
+    /* Inline code */
+    .md-inline-code {
+      background: #262626;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 12.5px;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      color: #e0d4f5;
+    }
+
+    /* Code blocks */
+    .md-codeblock {
+      background: #0d0d0d;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      margin: 8px 0;
+      font-size: 12.5px;
+      line-height: 1.5;
+      position: relative;
+    }
+    .md-codeblock code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      color: #e5e5e5;
+      white-space: pre;
+    }
+    .md-codeblock[data-lang]::before {
+      content: attr(data-lang);
+      position: absolute;
+      top: 6px;
+      right: 10px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-family: inherit;
+    }
+
+    /* Tables */
+    .md-table-wrap {
+      margin: 10px 0;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .md-table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    .md-table th, .md-table td {
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .md-table th {
+      background: var(--surface);
+      color: #f5f5f5;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+    }
+    .md-table tbody tr:last-child td { border-bottom: none; }
+    .md-table tbody tr:hover { background: rgba(139, 92, 246, 0.06); }
+    /* Right-align numeric-looking columns — any cell starting with a digit/minus */
+    .md-table td { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 12.5px; }
+    .md-table th:first-child, .md-table td:first-child { font-family: inherit; }
 
     .msg-system {
       text-align: center;
@@ -1134,20 +1220,108 @@
       toolEl.appendChild(resultDiv);
     }
 
+    // Line-by-line markdown renderer. Handles: tables, fenced code blocks,
+    // headings, lists (grouped into ul/ol), paragraphs, line breaks, plus
+    // inline bold/italic/code. Everything is HTML-escaped first so agent
+    // output can't inject elements.
     function formatMarkdown(text) {
-      return text
+      const escape = (s) => s
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
+        .replace(/>/g, '&gt;');
+
+      // 1. Extract fenced code blocks up front so nothing inside gets formatted.
+      const codeBlocks = [];
+      text = text.replace(/```([^\n]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
+        codeBlocks.push({ lang: lang.trim(), code: code.replace(/\n$/, '') });
+        return ` CB${codeBlocks.length - 1} `;
+      });
+
+      const inline = (s) => s
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>')
-        .replace(/`(.+?)`/g, '<code style="background:#262626;padding:2px 6px;border-radius:4px;font-size:13px">$1</code>')
-        .replace(/^- (.+)$/gm, '<li>$1</li>')
-        .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
-        .replace(/\n\n/g, '</p><p>')
-        .replace(/\n/g, '<br>')
-        .replace(/^/, '<p>')
-        .replace(/$/, '</p>');
+        .replace(/(?<!\*)\*(?!\s)([^*\n]+?)\*(?!\*)/g, '<em>$1</em>')
+        .replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>');
+
+      const parseRow = (line) =>
+        line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+
+      const isTableSep = (line) => /^\s*\|?[\s:|-]*-+[\s:|-]*\|?\s*$/.test(line) && line.includes('-');
+
+      const lines = text.split('\n');
+      const out = [];
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        // Table: current line contains '|', next line is a separator row
+        if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+          const header = parseRow(line);
+          const rows = [];
+          i += 2;
+          while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+            rows.push(parseRow(lines[i]));
+            i++;
+          }
+          const h = header.map((c) => `<th>${inline(escape(c))}</th>`).join('');
+          const b = rows
+            .map((r) => `<tr>${r.map((c) => `<td>${inline(escape(c))}</td>`).join('')}</tr>`)
+            .join('');
+          out.push(`<div class="md-table-wrap"><table class="md-table"><thead><tr>${h}</tr></thead><tbody>${b}</tbody></table></div>`);
+          continue;
+        }
+
+        // Heading (# .. ######)
+        const h = line.match(/^(#{1,6})\s+(.+)$/);
+        if (h) {
+          const level = h[1].length;
+          out.push(`<h${level} class="md-h${level}">${inline(escape(h[2]))}</h${level}>`);
+          i++;
+          continue;
+        }
+
+        // Lists: group consecutive list items into ul/ol
+        if (/^\s*(-|\*|\d+\.)\s+/.test(line)) {
+          const ordered = /^\s*\d+\.\s+/.test(line);
+          const tag = ordered ? 'ol' : 'ul';
+          const items = [];
+          while (i < lines.length && /^\s*(-|\*|\d+\.)\s+/.test(lines[i])) {
+            const content = lines[i].replace(/^\s*(-|\*|\d+\.)\s+/, '');
+            items.push(`<li>${inline(escape(content))}</li>`);
+            i++;
+          }
+          out.push(`<${tag} class="md-list">${items.join('')}</${tag}>`);
+          continue;
+        }
+
+        // Blank line
+        if (line.trim() === '') { i++; continue; }
+
+        // Paragraph: consecutive non-blank, non-structural lines
+        const para = [];
+        while (
+          i < lines.length &&
+          lines[i].trim() !== '' &&
+          !/^(#{1,6})\s/.test(lines[i]) &&
+          !/^\s*(-|\*|\d+\.)\s+/.test(lines[i]) &&
+          !(lines[i].includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]))
+        ) {
+          para.push(inline(escape(lines[i])));
+          i++;
+        }
+        if (para.length) out.push(`<p>${para.join('<br>')}</p>`);
+      }
+
+      // 2. Restore fenced code blocks.
+      let html = out.join('');
+      codeBlocks.forEach((cb, idx) => {
+        const langClass = cb.lang ? ` data-lang="${escape(cb.lang)}"` : '';
+        html = html.replace(
+          ` CB${idx} `,
+          `<pre class="md-codeblock"${langClass}><code>${escape(cb.code)}</code></pre>`
+        );
+      });
+      return html;
     }
 
     function escapeHtml(text) {
