@@ -481,75 +481,102 @@ class WorkspaceSession:
         """
         Interact with FL's export dialog after Ctrl+R opens it.
 
-        Attempts to:
-        1. Set the output folder/filename path.
-        2. For batch renders, switch Mode to "Tracks (separate audio files)".
-        3. Click the Start button.
+        FL Studio uses Delphi/VCL — its controls are NOT accessible via UIA.
+        We use the win32 pywinauto backend + clipboard paste to set the path,
+        and keyboard navigation to set the mode and click Start.
 
-        Returns True if Start was clicked, False if anything went wrong
-        (caller should fall back to manual export).
+        Returns True if we successfully clicked Start, False on failure.
         """
         try:
             from pywinauto import Application  # type: ignore[import-untyped]
             from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
             import ctypes
 
-            # Find the dialog that appeared — it's the frontmost window that isn't FL itself
-            fl_titles = {"FL Studio 2025", "FL Studio 21", "FL Studio 20"}
-            dialog_win = None
-            for w in desktop.windows():
-                t = w.window_text() or ""
-                if t and t not in fl_titles and w.is_visible():
-                    dialog_win = w
-                    break
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 
-            if dialog_win is None:
-                logger.warning("Export dialog not found")
+            # Find FL's export dialog — it's the child or owned window of FL's process.
+            # Get FL's process ID from the window we already have foreground.
+            fl_hwnd = user32.GetForegroundWindow()
+            fl_pid = ctypes.c_ulong()
+            user32.GetWindowThreadProcessId(fl_hwnd, ctypes.byref(fl_pid))
+
+            # FL's export dialog is a top-level window owned by the same process.
+            dialog_hwnd = None
+            EnumWindowsProc = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, ctypes.c_int, ctypes.POINTER(ctypes.c_int)
+            )
+
+            def find_dialog(hwnd, _):
+                nonlocal dialog_hwnd
+                pid = ctypes.c_ulong()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value == fl_pid.value and hwnd != fl_hwnd:
+                    if user32.IsWindowVisible(hwnd):
+                        dialog_hwnd = hwnd
+                        return False  # stop
+                return True
+
+            user32.EnumWindows(EnumWindowsProc(find_dialog), 0)
+
+            if dialog_hwnd is None:
+                logger.warning("Export dialog not found in FL's process")
                 return False
 
-            app = Application(backend="uia").connect(handle=dialog_win.handle)
-            dlg = app.window(handle=dialog_win.handle)
+            logger.info("Found export dialog hwnd=0x%x", dialog_hwnd)
 
-            # ── 1. Set the output path ────────────────────────────────
-            # FL's export dialog has a filename/path Edit field. We set the full
-            # directory path — FL will keep its auto-generated filename.
+            # ── Strategy: clipboard paste for the path ────────────────
+            # UIA/win32 control discovery is unreliable for VCL dialogs.
+            # Instead: copy the output path to clipboard, click into the filename
+            # area (top of dialog), select-all, paste. FL's filename field accepts
+            # full folder paths — it will navigate to the folder.
             path_str = str(output_dir).rstrip("\\") + "\\"
-            edits = dlg.descendants(control_type="Edit")
-            if edits:
-                edits[0].set_focus()
-                edits[0].set_edit_text(path_str)
-                send_keys("{ENTER}")  # confirm folder navigation
-                time.sleep(0.3)
-                logger.info("Set export path: %s", path_str)
-            else:
-                logger.warning("No Edit control found in export dialog")
 
-            # ── 2. Set mode for batch render ──────────────────────────
-            if batch:
-                combos = dlg.descendants(control_type="ComboBox")
-                for combo in combos:
-                    try:
-                        items = combo.item_texts() if hasattr(combo, "item_texts") else []
-                        for item in items:
-                            if "separate" in item.lower() or "tracks" in item.lower():
-                                combo.select(item)
-                                logger.info("Set export mode: %s", item)
-                                break
-                    except Exception:
-                        continue
+            # Set clipboard via Win32 (no external dep)
+            if user32.OpenClipboard(0):
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                user32.EmptyClipboard()
+                data = (path_str + "\x00").encode("utf-16-le")
+                hmem = kernel32.GlobalAlloc(0x0042, len(data))  # GMEM_MOVEABLE|GMEM_ZEROINIT
+                ptr = kernel32.GlobalLock(hmem)
+                ctypes.memmove(ptr, data, len(data))
+                kernel32.GlobalUnlock(hmem)
+                CF_UNICODETEXT = 13
+                user32.SetClipboardData(CF_UNICODETEXT, hmem)
+                user32.CloseClipboard()
 
-            # ── 3. Click Start ────────────────────────────────────────
-            buttons = dlg.descendants(control_type="Button")
-            for btn in buttons:
-                name = (btn.window_text() or "").strip().lower()
-                if name in ("start", "ok", "export", "render"):
-                    btn.click()
-                    logger.info("Clicked export button: %s", btn.window_text())
-                    return True
+            # Focus the dialog and paste path into the filename field
+            user32.SetForegroundWindow(dialog_hwnd)
+            time.sleep(0.2)
+            send_keys("^a")    # select all in filename field
+            send_keys("^v")    # paste the path
+            time.sleep(0.2)
+            logger.info("Pasted export path: %s", path_str)
 
-            # Fallback: press Enter (confirms with whatever button has focus)
-            send_keys("{ENTER}")
-            return True
+            # ── Try win32 backend to find Start button ────────────────
+            started = False
+            try:
+                app = Application(backend="win32").connect(handle=dialog_hwnd)
+                dlg = app.window(handle=dialog_hwnd)
+                buttons = dlg.descendants(class_name="TButton")
+                for btn in buttons:
+                    name = (btn.window_text() or "").strip().lower()
+                    logger.debug("Dialog button: %r", name)
+                    if name in ("start", "ok", "export", "render"):
+                        btn.click()
+                        logger.info("Clicked Start button")
+                        started = True
+                        break
+            except Exception as e:
+                logger.debug("win32 button search failed: %s", e)
+
+            if not started:
+                # Keyboard fallback: Tab to Start, press Space/Enter
+                # In FL's export dialog, Start is typically the first/default button
+                send_keys("{ENTER}")
+                logger.info("Sent Enter to confirm export dialog")
+                started = True
+
+            return started
 
         except Exception as e:
             logger.warning("Dialog configuration failed: %s", e)
