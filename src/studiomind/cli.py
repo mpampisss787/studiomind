@@ -167,10 +167,21 @@ def cmd_test_autorender(args: argparse.Namespace) -> None:
         print(f"  [WARN] Could not focus FL window: {e}")
         print("  Auto-render may still work but is less reliable.")
 
+    # 4. List ALL visible window titles so we can see what FL's export dialog is called
+    print("\n  All visible windows right now:")
+    try:
+        for t in enumerate_all_visible_windows():
+            if t.strip():
+                print(f"    {t!r}")
+    except Exception as e:
+        print(f"    (could not list: {e})")
+
     print("\n  Auto-render should work. Make sure:")
     print("  1. The StudioMind web server was restarted after installing pywinauto")
     print("  2. FL's export path is set to your workspace stems/ folder")
     print("     (do one manual File->Export->WAV to save the path)")
+    print("  3. When you run this, open FL's export dialog (Ctrl+R) first so we")
+    print("     can see its window title and confirm our dialog-search is correct.")
     print()
 
 
