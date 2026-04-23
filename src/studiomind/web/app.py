@@ -140,15 +140,33 @@ async def workspace_status():
     except Exception as exc:
         logger.warning("reconcile_with_filesystem failed: %s", exc)
 
-    # STEMS: manifest-driven (pending entries must show before file exists),
-    # but skip any ready/stale entry whose file is gone from disk.
+    # STEMS: filesystem-first — same logic as masters.  Scan stems/ directory
+    # and look up manifest for metadata.  Deleted files simply don't appear.
     stems = []
-    for _, rec in sorted(manifest.stems.items()):
-        d = rec.to_dict()
-        if d["status"] == "pending":
-            stems.append(d)
-        elif d.get("filename") and (project.stems_dir / d["filename"]).exists():
-            stems.append(d)
+    if project.stems_dir.exists():
+        manifest_stems_by_name = {
+            rec.filename: rec for rec in manifest.stems.values() if rec.filename
+        }
+        for wav in sorted(
+            project.stems_dir.glob("*.wav"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
+            rec = manifest_stems_by_name.get(wav.name)
+            if rec:
+                stems.append(rec.to_dict())
+            else:
+                # WAV in stems/ with no manifest entry — show without analysis
+                stems.append({
+                    "kind": "stem",
+                    "filename": wav.name,
+                    "status": "ready",
+                    "track_id": None,
+                    "track_name": wav.stem,
+                    "fl_state_hash": None,
+                    "rendered_at": wav.stat().st_mtime,
+                    "analysis": None,
+                })
 
     # MASTERS: filesystem-first — scan the actual directory, then look up
     # manifest for analysis data.  If the file is gone it simply won't appear,
