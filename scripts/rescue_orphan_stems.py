@@ -2,14 +2,21 @@
 One-shot cleanup for the prepare_stem_render misrouting bug (fixed in 205ef00).
 
 Before the fix, `prepare_stem_render` wrote its WAV to `masters/` instead of
-`stems/`. Over multiple test runs this accumulates orphan stems in masters/.
-This script scans every project's `masters/` folder, detects WAVs that aren't
-master renders (slug doesn't end in `_master`), and moves them into `stems/`.
+`stems/`. Repeated test runs accumulate stems in masters/:
+
+  - **Orphans**: in masters/ with NO matching file in stems/ → `MOVE` to stems/
+  - **Duplicates**: in masters/ that ALSO exist in stems/ (the batch export
+    landed them correctly later) → `DELETE` the masters/ copy (only if
+    --delete-duplicates is set)
+
+Actual master renders (slug ends `_master`) are never touched.
 
 Usage:
-    python scripts/rescue_orphan_stems.py              # dry-run, shows plan
-    python scripts/rescue_orphan_stems.py --apply       # do the moves
-    python scripts/rescue_orphan_stems.py --project koto  # one project only
+    python scripts/rescue_orphan_stems.py                             # dry-run, plan only
+    python scripts/rescue_orphan_stems.py --apply                     # move orphans
+    python scripts/rescue_orphan_stems.py --delete-duplicates         # dry-run, also shows dupes
+    python scripts/rescue_orphan_stems.py --apply --delete-duplicates # move orphans AND delete dupes
+    python scripts/rescue_orphan_stems.py --project koto              # one project only
 """
 
 from __future__ import annotations
@@ -38,7 +45,12 @@ def is_master_wav(wav: Path) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--apply", action="store_true", help="Actually move files (default: dry-run)")
+    ap.add_argument("--apply", action="store_true", help="Actually move/delete files (default: dry-run)")
+    ap.add_argument(
+        "--delete-duplicates",
+        action="store_true",
+        help="Also delete masters/ copies that already exist in stems/",
+    )
     ap.add_argument("--project", default=None, help="Only scan this project name")
     args = ap.parse_args()
 
@@ -54,6 +66,7 @@ def main() -> int:
 
     total_found = 0
     total_moved = 0
+    total_deleted = 0
     total_skipped = 0
 
     for project in projects:
@@ -69,27 +82,51 @@ def main() -> int:
         for wav in orphans:
             dest = stems_dir / wav.name
             total_found += 1
+
             if dest.exists():
-                print(f"  SKIP  {wav.name}  (already in stems/)")
-                total_skipped += 1
+                # Duplicate: a newer copy is already correctly in stems/
+                if args.delete_duplicates:
+                    if args.apply:
+                        try:
+                            wav.unlink()
+                            print(f"  DELETE {wav.name}  (dupe of stems/)")
+                            total_deleted += 1
+                        except OSError as e:
+                            print(f"  FAIL   {wav.name}  ({e})")
+                    else:
+                        print(f"  PLAN-DELETE {wav.name}  (dupe of stems/)")
+                else:
+                    print(f"  SKIP   {wav.name}  (dupe of stems/ — pass --delete-duplicates to remove)")
+                    total_skipped += 1
                 continue
+
+            # Orphan: stems/ has no such file; move it over.
             if args.apply:
                 stems_dir.mkdir(parents=True, exist_ok=True)
                 try:
                     shutil.move(str(wav), str(dest))
-                    print(f"  MOVE  {wav.name}  masters/ → stems/")
+                    print(f"  MOVE   {wav.name}  masters/ → stems/")
                     total_moved += 1
                 except OSError as e:
-                    print(f"  FAIL  {wav.name}  ({e})")
+                    print(f"  FAIL   {wav.name}  ({e})")
             else:
-                print(f"  PLAN  {wav.name}  masters/ → stems/")
+                print(f"  PLAN-MOVE   {wav.name}  masters/ → stems/")
 
     print()
     if args.apply:
-        print(f"Moved {total_moved} file(s), skipped {total_skipped}, total orphans found: {total_found}.")
+        bits = [f"moved {total_moved}"]
+        if args.delete_duplicates:
+            bits.append(f"deleted {total_deleted}")
+        bits.append(f"skipped {total_skipped}")
+        bits.append(f"total scanned {total_found}")
+        print("Done: " + ", ".join(bits) + ".")
     else:
-        print(f"Dry-run: would move {total_found - total_skipped} file(s) (skipped {total_skipped}).")
-        print("Re-run with --apply to actually move them.")
+        print(
+            "Dry-run. Re-run with --apply to execute. "
+            + ("(--delete-duplicates also set — masters/ copies will be removed.)"
+               if args.delete_duplicates
+               else "(Pass --delete-duplicates to clean masters/ copies that already exist in stems/.)")
+        )
     return 0
 
 
