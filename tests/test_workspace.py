@@ -244,8 +244,7 @@ def test_reconcile_clears_missing_files(tmp_path: Path):
     changed = p.reconcile_with_filesystem(m)
     assert changed is True
     assert m.stems[3].status == STATUS_READY        # file present — untouched
-    assert m.masters[0].status == STATUS_PENDING     # file missing → reset
-    assert m.masters[0].analysis is None
+    assert len(m.masters) == 0     # missing master removed entirely
 
 
 def test_reconcile_no_change_when_files_present(tmp_path: Path):

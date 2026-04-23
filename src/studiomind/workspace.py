@@ -287,16 +287,21 @@ class Project:
     def reconcile_with_filesystem(self, manifest: Manifest) -> bool:
         """
         Verify that every 'ready' or 'stale' entry in the manifest still has
-        its file on disk.  Missing files are reset to 'pending' (re-render
-        needed) and their analysis is cleared.
+        its file on disk.
 
-        Returns True if the manifest was modified, so the caller can decide
-        whether to save.  Called on every workspace-status poll so the UI
-        always reflects reality, even when the user deletes files manually.
+        - Stems with missing files → reset to 'pending' (track still in FL,
+          just needs re-rendering).
+        - Masters with missing files → removed entirely (they are timestamped
+          one-off snapshots; a 'pending' entry for a past timestamp makes no
+          sense).
+
+        Returns True if the manifest was modified so the caller can save.
+        Called on every workspace-status poll so the UI is always in sync
+        with the filesystem, even when files are deleted manually.
         """
         changed = False
 
-        for rec in manifest.stems.values():
+        for rec in list(manifest.stems.values()):
             if rec.status in (STATUS_READY, STATUS_STALE):
                 path = self.stems_dir / rec.filename
                 if rec.filename and not path.exists():
@@ -305,14 +310,15 @@ class Project:
                     rec.analysis = None
                     changed = True
 
-        for rec in manifest.masters:
-            if rec.status in (STATUS_READY, STATUS_STALE):
-                path = self.masters_dir / rec.filename
-                if rec.filename and not path.exists():
-                    rec.status = STATUS_PENDING
-                    rec.rendered_at = None
-                    rec.analysis = None
-                    changed = True
+        # Masters: remove missing entries outright
+        original_count = len(manifest.masters)
+        manifest.masters = [
+            rec for rec in manifest.masters
+            if rec.status not in (STATUS_READY, STATUS_STALE)
+            or (rec.filename and (self.masters_dir / rec.filename).exists())
+        ]
+        if len(manifest.masters) != original_count:
+            changed = True
 
         return changed
 
