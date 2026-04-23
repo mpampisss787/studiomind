@@ -161,7 +161,16 @@ If sidechain isn't routed, the user has to wire it in FL first. You can **detect
 
 Stock options: Fruity Stereo Enhancer, Fruity Mono. Rule of thumb: keep sub bass (< 120 Hz) centered/mono; widen mid-air elements (pads, stereo synth layers, reverb returns). Over-widening mids causes phase issues on mono playback.
 
-Check a rendered stem's balance: if `sub` is hot but the stereo_width meter (not yet exposed in analysis — future work) shows significant side content in that band, that's a mix risk.
+Every analysis on a stereo file now carries three fields:
+
+- **`correlation`** — L/R correlation coefficient in [−1, +1]. `+1.0` = perfect mono (same signal on both channels), `0.0` = uncorrelated, **negative values = phase issues** (may cancel on mono playback — investigate). Most good mixes sit around `+0.3` to `+0.8`.
+- **`side_ratio_db`** — overall side/mid energy ratio in dB. `-∞` = pure mono content. `-20 dB` = narrow. `-6 dB` = moderately wide. `0 dB` = equal mid/side (very wide, usually over-processed).
+- **`side_balance`** — per-band side-signal energy (same seven bands as `spectral_balance`). Use to answer "is the sub mono?" (side should be ≥20 dB below mid in the `sub` band) or "is the air stereo?" (wider is fine up there).
+
+**Mix risks to flag:**
+- Negative correlation on the master → phase issues, fails mono summing.
+- `side_balance.sub` within 6 dB of `spectral_balance.sub` → sub bass is not mono → mono compatibility risk.
+- `side_ratio_db > −3 dB` on an element that should feel focused (vocal lead, snare) → probably over-widened.
 
 ## Communication style
 

@@ -29,6 +29,18 @@ class AudioAnalysis:
     # this section). "broken" is not reachable here — unreadable files raise in
     # analyze_audio and are handled as failures upstream.
     status: str = "ok"
+    # Stereo-only fields. None on mono files.
+    # - correlation in [-1, 1]. 1 = perfect mono (L==R), 0 = uncorrelated,
+    #   negative = phase issues / inverse polarity.
+    # - side_ratio_db: 20*log10(side_rms / mid_rms). 0 dB means equal mid/side
+    #   energy (very wide), -inf means pure mono content, typical mixes land
+    #   between -20 (narrow) and -3 (very wide).
+    # - side_balance: per-band side-signal energy (dB) using the same BANDS as
+    #   spectral_balance. Useful for "is the sub mono?" (side should be ~-60+
+    #   dB below mid there) or "is air stereo?" (more side content is fine).
+    correlation: float | None = None
+    side_ratio_db: float | None = None
+    side_balance: dict[str, float] | None = None
 
     def summary(self) -> str:
         """Human-readable summary for the agent."""
@@ -44,6 +56,11 @@ class AudioAnalysis:
         ]
         for band, db in self.spectral_balance.items():
             lines.append(f"    {band}: {db:.1f} dB")
+        if self.correlation is not None:
+            lines.append(
+                f"  Stereo: correlation {self.correlation:+.2f}, "
+                f"side/mid {self.side_ratio_db:.1f} dB"
+            )
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
@@ -56,6 +73,12 @@ class AudioAnalysis:
                 return floor
             return round(v, 1)
 
+        def _safe_corr(v: float | None) -> float | None:
+            """Correlation is in [-1, 1]; floor/ceiling to that range."""
+            if v is None or not math.isfinite(v):
+                return None
+            return round(max(-1.0, min(1.0, v)), 3)
+
         return {
             "path": self.path,
             "sample_rate": self.sample_rate,
@@ -67,6 +90,12 @@ class AudioAnalysis:
             "spectral_balance": {k: _safe(v) for k, v in self.spectral_balance.items()},
             "rms_db": _safe(self.rms_db),
             "status": self.status,
+            "correlation": _safe_corr(self.correlation),
+            "side_ratio_db": _safe(self.side_ratio_db) if self.side_ratio_db is not None else None,
+            "side_balance": (
+                {k: _safe(v) for k, v in self.side_balance.items()}
+                if self.side_balance is not None else None
+            ),
         }
 
 
@@ -142,6 +171,42 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
     # be quiet in this section.
     status = "silent" if (not np.isfinite(rms_db) or rms_db < -60.0) else "ok"
 
+    # Stereo analysis — only meaningful for ≥ 2 channels.
+    correlation: float | None = None
+    side_ratio_db: float | None = None
+    side_balance: dict[str, float] | None = None
+    if num_channels >= 2:
+        L = audio[:, 0]
+        R = audio[:, 1]
+        # Correlation coefficient: +1 = perfect mono, 0 = uncorrelated,
+        # negative = out-of-phase / inverse polarity (mix risk).
+        # np.corrcoef returns nan for silent channels; guard.
+        if np.std(L) > 1e-9 and np.std(R) > 1e-9:
+            correlation = float(np.corrcoef(L, R)[0, 1])
+        else:
+            correlation = 1.0  # silent = trivially "mono"
+
+        mid = 0.5 * (L + R)
+        side = 0.5 * (L - R)
+        mid_rms = float(np.sqrt(np.mean(mid**2)))
+        side_rms = float(np.sqrt(np.mean(side**2)))
+        # side_ratio_db = 20*log10(side/mid). -inf → pure mono, 0 → equal energy.
+        if mid_rms > 1e-9:
+            side_ratio_db = 20 * np.log10((side_rms + 1e-12) / mid_rms)
+        else:
+            side_ratio_db = float("-inf")
+
+        # Per-band side energy so the agent can ask "is the sub mono?"
+        side_fft = np.abs(np.fft.rfft(side))
+        side_balance = {}
+        for band_name, (f_low, f_high) in BANDS.items():
+            mask = (fft_freqs >= f_low) & (fft_freqs < f_high)
+            band_energy = np.sum(side_fft[mask] ** 2)
+            if band_energy > 0:
+                side_balance[band_name] = 10 * np.log10(band_energy + 1e-10)
+            else:
+                side_balance[band_name] = -120.0
+
     return AudioAnalysis(
         path=str(path),
         sample_rate=sr,
@@ -153,6 +218,9 @@ def analyze_audio(path: str | Path) -> AudioAnalysis:
         spectral_balance=spectral_balance,
         rms_db=rms_db,
         status=status,
+        correlation=correlation,
+        side_ratio_db=side_ratio_db,
+        side_balance=side_balance,
     )
 
 
