@@ -167,6 +167,16 @@ class FLStudio:
         """Test the connection. Returns FL Studio version info."""
         return self._call("ping")
 
+    def get_project_name(self) -> dict:
+        """
+        Return FL's current project metadata.
+
+        Shape: {"name": str, "path": str, "window_title": str, "saved": bool}.
+        Any field may be empty if the FL API version doesn't expose it — the
+        companion should derive a StudioMind project name defensively.
+        """
+        return self._call("get_project_name")
+
     def __enter__(self) -> FLStudio:
         self.connect()
         return self

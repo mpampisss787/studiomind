@@ -174,6 +174,50 @@ def _handle_ping(params):
     }
 
 
+def _handle_get_project_name(params):
+    """
+    Return the current FL project name + path, best-effort.
+
+    FL's Python API exposes project metadata in different places across versions,
+    and none of these are guaranteed to exist. We try each and return whatever
+    we can; the companion app derives a StudioMind project folder from the result.
+    """
+    result = {"name": "", "path": "", "window_title": "", "saved": False}
+
+    try:
+        result["window_title"] = ui.getProgTitle()
+    except Exception:
+        pass
+
+    # general.getName() — returns the project name string on recent FL versions
+    getter = getattr(general, "getName", None)
+    if getter is not None:
+        try:
+            name = getter()
+            if isinstance(name, str):
+                result["name"] = name
+        except Exception:
+            pass
+
+    # general.getFilename() — full .flp path on recent FL versions
+    getter = getattr(general, "getFilename", None)
+    if getter is not None:
+        try:
+            path = getter()
+            if isinstance(path, str):
+                result["path"] = path
+        except Exception:
+            pass
+
+    # Has the project been saved at least once? Unsaved projects have no path.
+    try:
+        result["saved"] = not general.getChangedFlag() or bool(result["path"])
+    except Exception:
+        pass
+
+    return result
+
+
 def _handle_read_project_state(params):
     """Read full project snapshot."""
     state = {
@@ -498,6 +542,7 @@ def _handle_get_bpm(params):
 # Command dispatch table
 COMMANDS = {
     "ping": _handle_ping,
+    "get_project_name": _handle_get_project_name,
     "read_project_state": _handle_read_project_state,
     "read_mixer_track": _handle_read_mixer_track,
     "read_channel": _handle_read_channel,

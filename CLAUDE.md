@@ -37,11 +37,30 @@ FL Studio                                    <-- FL attaches to endpoint (B)
 | `src/studiomind/protocol.py` | SysEx encode/decode/chunk protocol |
 | `src/studiomind/bridge/midi_client.py` | MIDI I/O (python-rtmidi, threaded) |
 | `src/studiomind/bridge/commands.py` | Typed `FLStudio` class |
+| `src/studiomind/workspace.py` | Project folder + session.json manifest + staleness |
 | `src/studiomind/agent/loop.py` | Core agent loop with Claude tool use |
 | `src/studiomind/agent/tools.py` | 10 tool schemas + `ToolExecutor` |
 | `src/studiomind/agent/prompt.py` | Mixing engineer system prompt (3800 chars) |
 | `src/studiomind/analyzer/spectral.py` | FFT, LUFS, spectral balance, masking detection |
 | `src/studiomind/cli.py` | CLI: ports, ping, state, eq, agent, chat, shell |
+
+### Workspace (per-project folders)
+
+One FL project maps to one StudioMind project folder, mirroring the FL project name:
+
+```
+~/StudioMind/projects/<ProjectName>/
+    stems/              - per-track renders, deterministic filenames (overwritten)
+    masters/            - timestamped master renders (history kept for A/B)
+    references/         - drag-dropped reference tracks
+    .studiomind/
+        session.json    - manifest: every render + status + fl_state_hash + analysis
+```
+
+**Invariants:**
+- Stem filenames are `track_{id:03d}_{slug}.wav`, derived from FL state. User and agent cannot disagree about which file is which track.
+- `session.json` is the single source of truth for "what audio do I have and is it still fresh." Agent reads it at session start; does not rely on chat-history memory.
+- Each render is tagged with a hash of the relevant FL state at render time. When FL state changes, stems whose track changed are flagged `stale` — agent refuses to trust stale analysis and re-renders.
 
 ## MVP Tools (12)
 
@@ -49,6 +68,10 @@ FL Studio                                    <-- FL attaches to endpoint (B)
 **Render (safe):** `render_and_analyze` (master, stem, or full_mix mode — triggers FL export via pywinauto)
 **Write (destructive — require snapshot):** `set_builtin_eq`, `set_proq3`, `set_plugin_param`, `set_mixer_volume`, `set_mixer_pan`
 **Safety:** `snapshot`, `revert`
+
+## FL Commands (14)
+
+`ping`, `get_project_name`, `read_project_state`, `read_mixer_track`, `read_channel`, `set_eq`, `get_eq`, `set_plugin_param`, `get_plugin_params`, `set_mixer_param`, `snapshot`, `revert`, `transport`, `get_bpm`.
 
 ## Plugin Profiles
 
@@ -74,8 +97,11 @@ FL Studio                                    <-- FL attaches to endpoint (B)
 4. ~~MIDI Client~~ — Complete, threaded async
 5. ~~Agent Loop~~ — Complete, Claude tool use + preview gate
 6. ~~Windows round-trip test~~ — Live on Win11 25H2 ARM64 via MS MIDI Services loopback (2026-04-23)
-7. **Vertical slice ("Cut 2dB at 300Hz on piano")** ← NEXT
-8. Full MVP ("Mix this professionally")
+7. ~~Workspace data model~~ — Project folders + session.json + staleness hashing (2026-04-23, 15 tests)
+8. **Render loop Phase 1b** — `request_render` tool, file watcher, user-assisted export ← NEXT
+9. Memory layer — user.json, decisions.json, gotchas.json
+10. Vertical slice ("Cut 2dB at 300Hz on piano")
+11. Full MVP ("Mix this professionally")
 
 ## Windows Setup (driver-free)
 
