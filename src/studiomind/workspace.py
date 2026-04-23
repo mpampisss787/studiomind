@@ -582,7 +582,12 @@ class WorkspaceSession:
             logger.warning("Dialog configuration failed: %s", e)
             return False
 
-    def _try_auto_render(self, stop_event: threading.Event | None = None, batch: bool = False) -> tuple[bool, str]:
+    def _try_auto_render(
+        self,
+        stop_event: threading.Event | None = None,
+        batch: bool = False,
+        output_dir: Path | None = None,
+    ) -> tuple[bool, str]:
         """
         Attempt to trigger FL Studio's WAV export using Windows PostMessage,
         which sends key events directly to FL's window handle without changing
@@ -738,8 +743,14 @@ class WorkspaceSession:
             if self._interruptible_sleep(0.4, stop_event):
                 return False, "Stopped by user"
 
-            # Determine the output folder based on render type
-            output_dir = self._project.stems_dir if batch else self._project.masters_dir
+            # Callers now pass output_dir explicitly because the stem-vs-master
+            # decision is owned by the prepare_* function, not here. The legacy
+            # batch flag only controls stage-2 dialog handling (batch export
+            # offers a different confirmation path). Fall back on stems_dir if
+            # no output_dir was provided — that's always safe because nothing
+            # currently auto-renders masters (prepare_master is manual-only).
+            if output_dir is None:
+                output_dir = self._project.stems_dir
 
             configured = self._configure_export_dialog(
                 desktop, dialog_hwnd, output_dir, batch=batch, stop_event=stop_event
@@ -823,7 +834,11 @@ class WorkspaceSession:
             )
             self._project.save_manifest(self._manifest)
 
-        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event, batch=False)
+        auto_ok, auto_msg = self._try_auto_render(
+            stop_event=stop_event,
+            batch=False,
+            output_dir=self._project.stems_dir,
+        )
 
         if auto_ok:
             instruction = (
@@ -906,7 +921,11 @@ class WorkspaceSession:
 
         master_info = self.prepare_master() if include_master else None
 
-        auto_ok, auto_msg = self._try_auto_render(stop_event=stop_event, batch=True)
+        auto_ok, auto_msg = self._try_auto_render(
+            stop_event=stop_event,
+            batch=True,
+            output_dir=self._project.stems_dir,
+        )
 
         if auto_ok:
             instruction = (
