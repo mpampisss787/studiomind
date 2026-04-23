@@ -132,14 +132,38 @@ async def workspace_status():
 
     manifest = project.load_manifest()
 
-    # Keep manifest in sync with what's actually on disk.  If the user manually
-    # deleted a rendered file, downgrade it from ready→pending so the UI and the
-    # agent both see "needs re-render" instead of stale "done" state.
-    if project.reconcile_with_filesystem(manifest):
-        project.save_manifest(manifest)
+    # Try reconciling manifest against disk. Catch any error so a broken
+    # reconcile never prevents the status response from being returned.
+    try:
+        if project.reconcile_with_filesystem(manifest):
+            project.save_manifest(manifest)
+    except Exception as exc:
+        logger.warning("reconcile_with_filesystem failed: %s", exc)
 
-    stems = [rec.to_dict() for _, rec in sorted(manifest.stems.items())]
-    masters = [rec.to_dict() for rec in manifest.masters]
+    # Build response lists with an additional inline guard: never include a
+    # non-pending entry whose file is actually missing from disk.  This is the
+    # final safety net — if reconcile ran but still left a stale entry, the
+    # response will still omit it.
+    def stem_visible(rec) -> bool:
+        from studiomind.workspace import STATUS_PENDING
+        if rec["status"] == STATUS_PENDING:
+            return True  # pending = waiting for file, always show
+        return (project.stems_dir / rec["filename"]).exists()
+
+    def master_visible(rec) -> bool:
+        from studiomind.workspace import STATUS_PENDING
+        if rec["status"] == STATUS_PENDING:
+            return True
+        return (project.masters_dir / rec["filename"]).exists()
+
+    stems = [
+        rec.to_dict() for _, rec in sorted(manifest.stems.items())
+        if stem_visible(rec.to_dict())
+    ]
+    masters = [
+        rec.to_dict() for rec in manifest.masters
+        if master_visible(rec.to_dict())
+    ]
     references = (
         sorted(p.name for p in project.references_dir.iterdir() if p.is_file())
         if project.references_dir.exists()
