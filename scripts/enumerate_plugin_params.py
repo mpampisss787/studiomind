@@ -73,11 +73,17 @@ def main() -> int:
         # Flat array: index = param_id. Each entry captures the advertised name
         # + the current (post-load default) value so the typed wrapper has both
         # the ID lookup and a sanity check for its unit conversions.
+        # Flat array: index = param_id. Each entry captures the advertised name,
+        # the current normalized value (0.0-1.0) AND FL's rendered display string
+        # ("-12.3 dB", "50 ms", "2.5:1"). The display string is gold for deriving
+        # unit conversions — pair it with `value` across a few knob positions and
+        # you can fit the curve automatically.
         "params": [
             {
                 "id": i,
                 "name": p.get("name", ""),
                 "default_value": p.get("value"),
+                "default_display": p.get("display", ""),
             }
             for i, p in enumerate(params)
         ],
@@ -101,7 +107,8 @@ def main() -> int:
     if hits:
         print("\nParams worth verifying (matched common effect keywords):")
         for p in hits:
-            print(f"  {p['id']:4d}  {p['name']!r:40s}  default={p['default_value']}")
+            display = f"  ({p['default_display']})" if p.get("default_display") else ""
+            print(f"  {p['id']:4d}  {p['name']!r:40s}  default={p['default_value']}{display}")
     return 0
 
 
