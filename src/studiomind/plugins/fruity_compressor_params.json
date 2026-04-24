@@ -1,0 +1,39 @@
+{
+  "plugin_file_name": "fruity_compressor",
+  "plugin_reported_name": "Fruity Compressor",
+  "source_track_id": 7,
+  "source_slot": 0,
+  "num_params": 6,
+  "params": [
+    {
+      "id": 0,
+      "name": "Threshold",
+      "default_value": 1.0
+    },
+    {
+      "id": 1,
+      "name": "Ratio",
+      "default_value": 0.02027
+    },
+    {
+      "id": 2,
+      "name": "Gain",
+      "default_value": 0.5
+    },
+    {
+      "id": 3,
+      "name": "Attack",
+      "default_value": 0.0375
+    },
+    {
+      "id": 4,
+      "name": "Release",
+      "default_value": 0.049762
+    },
+    {
+      "id": 5,
+      "name": "Type",
+      "default_value": 0.0
+    }
+  ]
+}
