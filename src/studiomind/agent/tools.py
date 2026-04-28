@@ -230,6 +230,18 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "orient_all",
+        "description": (
+            "SESSION START TOOL — call this INSTEAD of the five individual orient "
+            "tools (get_workspace_status / read_project_history / "
+            "detect_external_changes / read_recent_decisions / "
+            "read_user_preferences). Returns all five results in a single response "
+            "so orient completes in ONE API turn instead of five. "
+            "No arguments needed."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_workspace_status",
         "description": (
             "Return the current StudioMind project workspace: active project name, "
@@ -1230,6 +1242,34 @@ class ToolExecutor:
                 "run `studiomind project` first, or the agent shell did not initialize one."
             )
         return self._workspace
+
+    def _exec_orient_all(self, params: dict) -> Any:
+        """Run all five orient reads server-side and return them in one dict.
+
+        Replaces five sequential tool calls (5 API round-trips, ~10 s) with
+        a single call that completes in one turn (~2 s)."""
+        results: dict[str, Any] = {}
+        try:
+            results["workspace_status"] = self._exec_get_workspace_status({})
+        except Exception as e:
+            results["workspace_status"] = {"error": str(e)}
+        try:
+            results["project_history"] = self._exec_read_project_history({})
+        except Exception as e:
+            results["project_history"] = {"error": str(e)}
+        try:
+            results["external_changes"] = self._exec_detect_external_changes({})
+        except Exception as e:
+            results["external_changes"] = {"error": str(e)}
+        try:
+            results["recent_decisions"] = self._exec_read_recent_decisions({})
+        except Exception as e:
+            results["recent_decisions"] = {"error": str(e)}
+        try:
+            results["user_preferences"] = self._exec_read_user_preferences({})
+        except Exception as e:
+            results["user_preferences"] = {"error": str(e)}
+        return results
 
     def _exec_get_workspace_status(self, params: dict) -> Any:
         return self._require_workspace().status()
