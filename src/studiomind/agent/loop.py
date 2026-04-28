@@ -32,8 +32,12 @@ MAX_TURNS = 30  # Safety limit on agent loop iterations
 # this threshold, summarise old turns with Haiku (cheap + fast) and replace them
 # with a compact context block. Keeps cost and attention quality stable over long
 # sessions without losing the important decisions.
-COMPACTION_TOKEN_THRESHOLD = 12_000
-COMPACTION_KEEP_RECENT_TURNS = 4   # always keep the last N turn-pairs verbatim
+COMPACTION_TOKEN_THRESHOLD = 50_000   # 12k was too aggressive — a 20-stem batch
+                                      # analysis alone uses ~20k, causing mid-task
+                                      # compaction before the agent can diagnose.
+                                      # 50k comfortably holds: system prompt + orient
+                                      # + full stem analysis + 3-4 fix/verify cycles.
+COMPACTION_KEEP_RECENT_TURNS = 6   # keep a bit more recent context verbatim
 COMPACTION_MODEL = "claude-haiku-4-5-20251001"  # cheap summariser
 
 
