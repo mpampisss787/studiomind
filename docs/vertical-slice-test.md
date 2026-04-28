@@ -10,14 +10,18 @@ slice after any change that touches the write tools (`set_builtin_eq`,
 `set_proq3`, `set_compressor`, `set_mixer_volume`) or the Plan/Verify prompt
 steps.
 
-There are currently **two slices**:
+There are currently **three slices**:
 
 1. **EQ slice** — `set_builtin_eq` / `set_proq3`. Verifies the band-targeted
    write path against spectral_balance deltas.
 2. **Compressor slice** — `set_compressor` (Fruity Compressor). Verifies the
    dynamics write path against crest_factor / LRA / RMS-vs-LUFS deltas.
+3. **Sidechain slice** — `apply_sidechain`. Verifies the routing write path
+   creates the send via the FL API and emits a clean advisory for the
+   plugin-wrapper sidechain-source dropdown that the user has to confirm
+   by hand.
 
-## Preconditions (both slices)
+## Preconditions (all slices)
 
 - FL Studio 2025 running with a real project open (not an empty template).
 - MIDI bridge connected — `ping` works.
@@ -142,6 +146,68 @@ Paste verbatim, substituting the track name and slot:
 
 ---
 
+## Slice C — Sidechain (kick → bass duck)
+
+Pre-load **Fruity Compressor** on the bass (or synth bus) track that you
+want ducked. Note both track IDs.
+
+### Test prompt
+
+Paste verbatim, substituting the track names:
+
+> Sidechain the bass to the kick — gentle pump, ~6 dB duck on the
+> downbeats. Snapshot first. Use apply_sidechain, then read me the
+> advisory verbatim so I can finish the wire in FL. After I confirm
+> I've picked Kick from the bass-comp's sidechain-source dropdown,
+> tune the comp's threshold and release for that ~6 dB target depth,
+> re-render the bass + master, and report the side_balance / bass-LUFS
+> shift before vs. after.
+
+### What a passing run looks like
+
+1. **Orient:** same as Slices A/B, plus `read_mixer_track` on both kick
+   and bass to confirm names, slot of the bass comp, and that no
+   pre-existing send already routes kick → bass.
+2. **Snapshot:** `snapshot("pre-sidechain kick → bass")`.
+3. **Wire (API half):** `apply_sidechain(source_track=<kick>,
+   target_track=<bass>)`. Tool returns
+   `advisory_status: "ready_for_dropdown"` and the advisory string —
+   agent reads it to you verbatim. You right-click the bass comp's
+   sidechain-source dropdown in FL and pick the kick. Reply "done" in
+   chat.
+4. **Tune (set_compressor):** agent calls `set_compressor` on the bass
+   with conservative starting values (e.g., threshold -18 dB, ratio
+   3:1, attack 5 ms, release 80 ms) and explains the prediction
+   (~6 dB pump on each kick hit, faster release = punchier).
+5. **Verify:** `refresh_staleness` flags bass + master. User Ctrl+R on
+   each. `collect_all_renders`.
+6. **Report:**
+   ```
+                      Before     After     Delta
+   Bass low      +3.1 dB   +1.5 dB   -1.6 dB   ✓ duck visible
+   Bass LUFS    -10.2     -11.0     -0.8 LU   ✓ headroom freed
+   Master peak   -0.3 dB   -0.8 dB             ✓ kick punches through
+   ```
+7. **Record:** `write_history_entry`.
+
+### Things to check (sidechain slice)
+
+- [ ] `apply_sidechain` returns `advisory_status: "ready_for_dropdown"`
+      because Fruity Compressor was pre-loaded.
+- [ ] Advisory text actually names both tracks and the comp slot — agent
+      reads it back unedited.
+- [ ] If you re-run with the same source/target, tool reports
+      `send_already_existed: true` and does not duplicate the route.
+- [ ] If you intentionally remove Fruity Compressor before running, tool
+      reports `advisory_status: "needs_comp_loaded"` and the advisory
+      tells you to add a comp first.
+- [ ] `decisions.json` has a record with `tool: "apply_sidechain"`,
+      `outcome: "pending"`, including the source/target track IDs.
+- [ ] FL undo after the run cleanly removes the send (agent's snapshot
+      maps to FL's `general.saveUndo` call inside `_handle_set_send`).
+
+---
+
 ## Known failure modes
 
 - **Agent re-renders every turn:** prompt regression. Measure step in
@@ -159,6 +225,17 @@ Paste verbatim, substituting the track name and slot:
   reasonably but in the wrong magnitude, the calibration constants in
   `src/studiomind/plugins/fruity_compressor.py` need tuning against a
   measurement run — see the module docstring.
+- **Sidechain slice: dropdown isn't there:** FL's plugin-wrapper
+  sidechain-source dropdown only lists tracks that *send to* the target.
+  If `apply_sidechain` succeeded and the dropdown still shows nothing,
+  the route didn't actually fire — call `read_mixer_track` on the source
+  and confirm `routing` lists the target. (Older FL versions silently
+  no-op `setRouteToLevel` but `setRouteTo` always works.)
+- **Sidechain slice: comp doesn't duck after picking the source:** the
+  comp's threshold may be set so high that the kick never crosses it.
+  Drop the threshold by 6-12 dB and re-listen. If nothing changes, the
+  user may have selected the wrong track in the dropdown — the
+  advisory's source-track name should match exactly.
 
 ## History
 

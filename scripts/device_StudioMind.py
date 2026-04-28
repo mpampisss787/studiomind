@@ -505,6 +505,60 @@ def _handle_set_mixer_param(params):
     return {"ok": True}
 
 
+def _handle_set_send(params):
+    """Create or update a mixer send (one track routes to another).
+
+    A send from kick → bass is the audio-routing half of a sidechain
+    setup. The other half (telling the comp/limiter to listen to the
+    sidechain dropdown) is set in FL's plugin wrapper UI and is not
+    exposed through the VST param API for stock dynamics plugins.
+    """
+    source = params["source"]
+    dest = params["dest"]
+    level = params.get("level", 0.8)
+    enabled = params.get("enabled", True)
+
+    if source == dest:
+        return {"error": "Source and dest must differ"}
+
+    general.saveUndo("StudioMind: send change", 0, 0)
+
+    already_active = bool(mixer.getRouteSendActive(source, dest))
+
+    if not enabled:
+        # Remove the route
+        mixer.setRouteTo(source, dest, 0)
+        mixer.afterRoutingChanged()
+        return {
+            "ok": True,
+            "source": source,
+            "dest": dest,
+            "previously_active": already_active,
+            "now_active": False,
+        }
+
+    # Create or update the route
+    if not already_active:
+        mixer.setRouteTo(source, dest, 1)
+    try:
+        mixer.setRouteToLevel(source, dest, level)
+    except Exception:
+        # setRouteToLevel is API v36+; older FL silently no-ops the level
+        pass
+    mixer.afterRoutingChanged()
+
+    return {
+        "ok": True,
+        "source": source,
+        "source_name": mixer.getTrackName(source),
+        "dest": dest,
+        "dest_name": mixer.getTrackName(dest),
+        "level": level,
+        "previously_active": already_active,
+        "now_active": True,
+    }
+
+
 def _handle_snapshot(params):
     """Save undo state."""
     label = params.get("label", "StudioMind snapshot")
@@ -551,6 +605,7 @@ COMMANDS = {
     "set_plugin_param": _handle_set_plugin_param,
     "get_plugin_params": _handle_get_plugin_params,
     "set_mixer_param": _handle_set_mixer_param,
+    "set_send": _handle_set_send,
     "snapshot": _handle_snapshot,
     "revert": _handle_revert,
     "transport": _handle_transport,

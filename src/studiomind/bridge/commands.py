@@ -139,6 +139,23 @@ class FLStudio:
         """Solo/unsolo a mixer track."""
         return self._call("set_mixer_param", track_id=track_id, param="solo", value=int(solo))
 
+    def set_send(
+        self,
+        source_track: int,
+        dest_track: int,
+        level: float = 0.8,
+        enabled: bool = True,
+    ) -> dict:
+        """Create / update / remove a mixer send. The audio-routing half of a
+        sidechain setup; the comp's sidechain-source dropdown is wrapper-UI."""
+        return self._call(
+            "set_send",
+            source=source_track,
+            dest=dest_track,
+            level=level,
+            enabled=enabled,
+        )
+
     # ── Safety Tools ────────────────────────────────────────────
 
     def snapshot(self, label: str = "") -> dict:

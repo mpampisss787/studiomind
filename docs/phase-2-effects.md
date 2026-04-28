@@ -40,9 +40,13 @@ be useful on any given effect.
    also needs to learn about aux sends, not just insert effects. Typed
    wrapper: `set_reverb(track_id, slot, size, decay_s, damp, wet, dry)`.
 4. **Fruity Delay 3** — stock delay. Similar shape to reverb.
-5. **Sidechain routing** — mixer send from kick track to comp key-input on
-   a bass/synth track. Not a single plugin, a *routing pattern*. Needs its
-   own tool: `apply_sidechain(source_track, target_track, amount_db)`.
+5. ~~**Sidechain routing**~~ — **shipped 2026-04-28.** `apply_sidechain`
+   tool creates the send via `mixer.setRouteTo` + `setRouteToLevel`; the
+   per-plugin sidechain-source dropdown is FL-wrapper UI (not VST-exposed
+   for stock dynamics) so the tool returns a structured advisory that
+   names the target's loaded comp/limiter and the user finishes with one
+   right-click. Detects existing sends, distinguishes
+   `ready_for_dropdown` vs `needs_comp_loaded`. 13 tests.
 6. **Fruity Stereo Enhancer** — width control.
 7. **Automation** — parameter automation writing via FL's event system. Complex,
    defer.

@@ -565,6 +565,45 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "apply_sidechain",
+        "description": (
+            "Wire a sidechain from a source track (typically the kick) to a "
+            "target track (typically the bass or a synth bus). Creates the "
+            "audio-routing send via the FL API, then returns an instruction "
+            "string you must read to the user — FL's plugin-wrapper sidechain-"
+            "source dropdown is NOT exposed to the VST API for stock dynamics "
+            "plugins, so the user has to confirm the dropdown manually (one "
+            "right-click in FL).\n\n"
+            "If a send already exists from source → target, this tool is a "
+            "no-op on the routing and only emits the dropdown-confirmation "
+            "advisory.\n\n"
+            "Detects whether the target track has Fruity Compressor or Fruity "
+            "Limiter loaded. If neither is present, returns advisory='no comp "
+            "loaded' and the user must add one before the sidechain works.\n\n"
+            "ALWAYS call snapshot() before using this tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_track": {
+                    "type": "integer",
+                    "description": "Mixer track to use as the sidechain key (e.g., kick).",
+                },
+                "target_track": {
+                    "type": "integer",
+                    "description": "Mixer track to be ducked (e.g., bass, synth bus).",
+                },
+                "send_level": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Send level (0.0-1.0, ~0.8 = unity). Default 0.8.",
+                },
+            },
+            "required": ["source_track", "target_track"],
+        },
+    },
+    {
         "name": "set_compressor",
         "description": (
             "Set Fruity Compressor parameters using human-readable units (dB, "
@@ -726,6 +765,7 @@ DESTRUCTIVE_TOOLS = {
     "set_compressor",
     "set_mixer_volume",
     "set_mixer_pan",
+    "apply_sidechain",
 }
 
 # Tools that only read state — safe to execute without confirmation
@@ -1033,6 +1073,107 @@ class ToolExecutor:
             "attack_ms": params.get("attack_ms"),
             "release_ms": params.get("release_ms"),
             "knee": params.get("knee"),
+        }
+
+    # Plugins on the target track that accept FL's wrapper-level sidechain
+    # input. If any of these are loaded, the user can complete the sidechain
+    # with one right-click on the plugin's sidechain dropdown. If none, the
+    # user has to add one first.
+    _SIDECHAIN_CAPABLE_PLUGINS = (
+        "Fruity Compressor",
+        "Fruity Limiter",
+        "Maximus",
+        "Fruity Multiband Compressor",
+    )
+
+    def _exec_apply_sidechain(self, params: dict) -> Any:
+        source_track = params["source_track"]
+        target_track = params["target_track"]
+        send_level = params.get("send_level", 0.8)
+
+        if source_track == target_track:
+            return {
+                "ok": False,
+                "error": "source_track and target_track must differ",
+            }
+
+        # Read the target track to find an existing comp/limiter we can cite
+        target = self._fl.read_mixer_track(target_track)
+        target_name = target.get("name") or f"track {target_track}"
+        capable_plugins = []
+        for plugin in target.get("plugins", []) or []:
+            pname = plugin.get("name") or ""
+            if pname in self._SIDECHAIN_CAPABLE_PLUGINS:
+                capable_plugins.append({
+                    "slot": plugin.get("slot"),
+                    "name": pname,
+                })
+
+        # Read the source track (just for the name in the advisory)
+        source = self._fl.read_mixer_track(source_track)
+        source_name = source.get("name") or f"track {source_track}"
+
+        # Was a route already in place?
+        existing_routes = source.get("routing", []) or []
+        already_routed = any(r.get("dest") == target_track for r in existing_routes)
+
+        # Create the send (or no-op if already there). Bridge call is
+        # idempotent: device script's _handle_set_send detects the existing
+        # state and only re-fires setRouteTo when needed.
+        send_result = self._fl.set_send(
+            source_track=source_track,
+            dest_track=target_track,
+            level=send_level,
+            enabled=True,
+        )
+
+        # Build the advisory the agent reads to the user
+        if capable_plugins:
+            plugin_label = capable_plugins[0]["name"]
+            plugin_slot = capable_plugins[0]["slot"]
+            advisory = (
+                f"Send '{source_name}' → '{target_name}' is in place. "
+                f"Final step: in FL, click {plugin_label} (slot {plugin_slot}) "
+                f"on '{target_name}' → its plugin-wrapper toolbar → "
+                f"sidechain-source dropdown → select '{source_name}'. "
+                f"This last click is FL UI only; the VST API doesn't expose "
+                f"the dropdown for stock dynamics plugins."
+            )
+            advisory_status = "ready_for_dropdown"
+        else:
+            advisory = (
+                f"Send '{source_name}' → '{target_name}' is in place, but "
+                f"'{target_name}' has no Fruity Compressor / Fruity Limiter / "
+                f"Maximus loaded — sidechain compression needs one of those. "
+                f"Add a Fruity Compressor or Limiter on '{target_name}', then "
+                f"in its plugin-wrapper sidechain-source dropdown select "
+                f"'{source_name}'."
+            )
+            advisory_status = "needs_comp_loaded"
+
+        self._log_decision(
+            tool="apply_sidechain",
+            params=params,
+            description=(
+                f"Sidechain '{source_name}' → '{target_name}' "
+                f"(send level {send_level:.2f}, "
+                f"{'send already existed' if already_routed else 'send created'}, "
+                f"advisory={advisory_status})"
+            ),
+        )
+
+        return {
+            "ok": True,
+            "source_track": source_track,
+            "source_name": source_name,
+            "target_track": target_track,
+            "target_name": target_name,
+            "send_level": send_level,
+            "send_already_existed": already_routed,
+            "send_result": send_result,
+            "target_capable_plugins": capable_plugins,
+            "advisory_status": advisory_status,
+            "advisory": advisory,
         }
 
     def _require_workspace(self) -> WorkspaceSession:

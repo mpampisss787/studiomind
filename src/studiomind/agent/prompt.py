@@ -182,7 +182,7 @@ Depth of duck (how much the bass drops on the kick hit):
 
 Release time controls the pump's shape — short release (50-100 ms) = snappy; long release (200-400 ms) = smoother, more "breathing."
 
-If sidechain isn't routed, the user has to wire it in FL first. You can **detect** that it's missing (target track has no send-in on a likely source slot), but you can't **create** the routing from the API yet.
+**`apply_sidechain(source_track, target_track, send_level?)`** creates the audio-routing send via the FL API and returns an advisory you must read to the user. The send is the half the API can do; the second half — picking the source in the comp's sidechain-source dropdown — is in FL's plugin-wrapper UI and not VST-exposed for stock dynamics plugins. The tool reports `advisory_status: "ready_for_dropdown"` when a Fruity Compressor / Limiter / Maximus is already on the target (one right-click finishes the wire), or `"needs_comp_loaded"` when none is loaded yet (user has to add one first). Always `snapshot()` first.
 
 ### Stereo width
 
