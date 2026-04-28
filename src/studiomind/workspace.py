@@ -154,6 +154,7 @@ class Project:
     REFERENCES_DIR = "references"
     DROPS_DIR = "drops"
     META_DIR = ".studiomind"
+    ANALYSES_DIR = ".studiomind/analyses"
     MANIFEST_FILE = "session.json"
     HISTORY_FILE = "history.md"
     NOTES_FILE = "notes.md"
@@ -190,6 +191,12 @@ class Project:
         return self.root / self.META_DIR
 
     @property
+    def analyses_dir(self) -> Path:
+        """Cache directory for STFT-derived analysis artifacts. One .npz per
+        ingested WAV; keyed by file basename."""
+        return self.root / self.ANALYSES_DIR
+
+    @property
     def manifest_path(self) -> Path:
         return self.meta_dir / self.MANIFEST_FILE
 
@@ -218,6 +225,7 @@ class Project:
             self.references_dir,
             self.drops_dir,
             self.meta_dir,
+            self.analyses_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -443,6 +451,9 @@ class WorkspaceSession:
         self._master_adopt_attempts: dict[str, int] = {}
         # Analyzer injection — defaults to studiomind.analyzer.spectral.analyze_audio
         self._analyze_fn = analyze_fn
+        # Files we've tried to ingest (cache-warm scan), to avoid hammering
+        # broken/locked files every tick. Cleared if the file's mtime moves.
+        self._ingest_attempts: dict[str, tuple[float, int]] = {}
 
     @property
     def project(self) -> Project:
@@ -900,14 +911,15 @@ class WorkspaceSession:
     def _run_analysis(self, path: Path) -> dict:
         if self._analyze_fn is not None:
             return self._analyze_fn(path)
-        from studiomind.analyzer.spectral import analyze_audio
+        from studiomind.analyzer.pipeline import analyze_and_cache
 
         # File-lock retry: FL may still hold the WAV open right after the
         # batch export finishes. Retry a few times before giving up.
         last_err: Exception | None = None
         for attempt in range(4):
             try:
-                return analyze_audio(path).to_dict()
+                analysis = analyze_and_cache(path, self._project.analyses_dir)
+                return analysis.to_dict()
             except Exception as e:
                 last_err = e
                 msg = str(e).lower()
@@ -918,13 +930,86 @@ class WorkspaceSession:
         raise last_err if last_err else RuntimeError("analyze_audio failed")
 
     def _watch_loop(self) -> None:
-        """Background poller: mark pending entries READY when their file lands and is stable."""
+        """Background poller.
+
+        Two passes per tick:
+          1. `_poll_pending` — match files in stems/ and masters/ to pending
+             render records (the agent-driven flow).
+          2. `_scan_for_ingest` — analyze and cache any audio file in the
+             workspace that doesn't yet have a current cache entry, regardless
+             of how it got there (drag-and-drop into chat, FL native drag,
+             external copy). Keeps the cache warm so drill-down tools never
+             have to wait.
+        """
         while not self._watcher_stop.is_set():
             try:
                 self._poll_pending()
             except Exception as e:
                 logger.exception("Watcher poll error: %s", e)
+            try:
+                self._scan_for_ingest()
+            except Exception as e:
+                logger.exception("Watcher ingest-scan error: %s", e)
             self._watcher_stop.wait(self.WATCH_INTERVAL_S)
+
+    # Don't retry an ingest attempt more than this many times per (path, mtime).
+    # Files that fail repeatedly (corrupt MP3, etc.) shouldn't burn CPU forever.
+    _INGEST_MAX_ATTEMPTS = 3
+
+    def _scan_for_ingest(self) -> None:
+        """Walk all four ingest dirs and analyze+cache anything not already cached.
+
+        Honors:
+          - skips files we wrote ourselves (`*.decoded.wav`) — they're cached
+            via their original (non-WAV) filename
+          - skips formats we can't decode (`.txt`, `.png`, etc.)
+          - applies a per-file attempt limit keyed on (path, mtime) so a
+            corrupt file doesn't get retried every tick
+        """
+        from studiomind.analyzer.pipeline import is_cached, analyze_and_cache
+        from studiomind.ingest.decode import is_supported
+
+        analyses_dir = self._project.analyses_dir
+        roots = [
+            self._project.stems_dir,
+            self._project.masters_dir,
+            self._project.references_dir,
+            self._project.drops_dir,
+        ]
+        for root in roots:
+            if not root.exists():
+                continue
+            for f in root.iterdir():
+                if not f.is_file():
+                    continue
+                if f.name.endswith(".decoded.wav"):
+                    continue  # our own output, cached via the original
+                if not is_supported(f):
+                    continue
+                if is_cached(f, analyses_dir):
+                    continue
+
+                key = str(f)
+                try:
+                    mtime = f.stat().st_mtime
+                except OSError:
+                    continue
+                last_mtime, attempts = self._ingest_attempts.get(key, (0.0, 0))
+                if mtime != last_mtime:
+                    attempts = 0  # file changed → fresh attempt budget
+                if attempts >= self._INGEST_MAX_ATTEMPTS:
+                    continue
+
+                try:
+                    analyze_and_cache(f, analyses_dir)
+                    self._ingest_attempts.pop(key, None)
+                    logger.debug("Auto-analyzed %s", f.name)
+                except Exception as e:
+                    self._ingest_attempts[key] = (mtime, attempts + 1)
+                    logger.debug(
+                        "Ingest scan: %s failed (attempt %d/%d): %s",
+                        f.name, attempts + 1, self._INGEST_MAX_ATTEMPTS, e,
+                    )
 
     def _is_fl_batch_master(self, filename: str) -> bool:
         """
