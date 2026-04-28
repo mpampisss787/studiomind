@@ -788,19 +788,13 @@ class ToolExecutor:
 
     def _exec_prepare_batch_render(self, params: dict) -> Any:
         include_master = params.get("include_master", True)
-        return self._require_workspace().prepare_batch_render(
-            include_master=include_master,
-            stop_event=self._stop_event,
-        )
+        return self._require_workspace().prepare_batch_render(include_master=include_master)
 
     def _exec_prepare_stem_render(self, params: dict) -> Any:
-        return self._require_workspace().prepare_stem(
-            track_id=params["track_id"],
-            stop_event=self._stop_event,
-        )
+        return self._require_workspace().prepare_stem(track_id=params["track_id"])
 
     def _exec_prepare_master_render(self, params: dict) -> Any:
-        return self._require_workspace().prepare_master(stop_event=self._stop_event)
+        return self._require_workspace().prepare_master()
 
     def _exec_collect_render(self, params: dict) -> Any:
         return self._require_workspace().collect(

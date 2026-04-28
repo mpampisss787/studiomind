@@ -152,6 +152,7 @@ class Project:
     STEMS_DIR = "stems"
     MASTERS_DIR = "masters"
     REFERENCES_DIR = "references"
+    DROPS_DIR = "drops"
     META_DIR = ".studiomind"
     MANIFEST_FILE = "session.json"
     HISTORY_FILE = "history.md"
@@ -175,6 +176,14 @@ class Project:
     @property
     def references_dir(self) -> Path:
         return self.root / self.REFERENCES_DIR
+
+    @property
+    def drops_dir(self) -> Path:
+        """User-volunteered audio: bounces, samples, voice memos, mystery WAVs.
+        Anything dropped without a specific role; the agent decides what to do
+        with it via conversation. Filenames are user-controlled — no slug
+        invariant like stems/."""
+        return self.root / self.DROPS_DIR
 
     @property
     def meta_dir(self) -> Path:
@@ -203,7 +212,13 @@ class Project:
         return DecisionsLog.load(self.decisions_path)
 
     def ensure_dirs(self) -> None:
-        for d in (self.stems_dir, self.masters_dir, self.references_dir, self.meta_dir):
+        for d in (
+            self.stems_dir,
+            self.masters_dir,
+            self.references_dir,
+            self.drops_dir,
+            self.meta_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
     def load_manifest(self) -> Manifest:
@@ -459,338 +474,35 @@ class WorkspaceSession:
         with self._lock:
             stems = [rec.to_dict() for _tid, rec in sorted(self._manifest.stems.items())]
             masters = [rec.to_dict() for rec in self._manifest.masters]
-        # Reference tracks are files physically present in references/
-        references = (
-            sorted(p.name for p in self._project.references_dir.iterdir() if p.is_file())
-            if self._project.references_dir.exists()
-            else []
-        )
+
+        def _list_dir(d: Path) -> list[str]:
+            if not d.exists():
+                return []
+            return sorted(p.name for p in d.iterdir() if p.is_file())
+
         return {
             "project_name": self._project.name,
             "root": str(self._project.root),
             "fl_project_path": self._manifest.fl_project_path,
             "stems_dir": str(self._project.stems_dir),
             "masters_dir": str(self._project.masters_dir),
+            "references_dir": str(self._project.references_dir),
+            "drops_dir": str(self._project.drops_dir),
             "stems": stems,
             "masters": masters,
-            "references": references,
+            "references": _list_dir(self._project.references_dir),
+            "drops": _list_dir(self._project.drops_dir),
         }
 
-    # ── Auto-render ───────────────────────────────────────────────
+    # ── Auto-render removed 2026-04-27 ────────────────────────────
+    # The pywinauto + SetForegroundWindow + EnumChildWindows + SendInput
+    # automation stack was scrapped. Audio now arrives via three
+    # converging channels feeding the watcher: manual FL render, web
+    # drop-zone, and FL native drag-to-Explorer. See
+    # vault: Projects/StudioMind/decisions.md (2026-04-27 entries).
 
-    def _interruptible_sleep(self, seconds: float, stop_event: threading.Event | None = None) -> bool:
-        """Sleep for `seconds`, checking stop_event every 100ms. Returns True if stopped."""
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            if stop_event is not None and stop_event.is_set():
-                return True
-            time.sleep(min(0.1, deadline - time.monotonic()))
-        return False
 
-    def _configure_export_dialog(
-        self,
-        desktop: Any,
-        dialog_hwnd: int,
-        output_dir: Path,
-        batch: bool = False,
-        stop_event: threading.Event | None = None,
-    ) -> bool:
-        """
-        Type the output path into the Save As dialog and press Enter/Save.
-
-        The dialog already has keyboard focus (detected via foreground change).
-        We use SendInput to type each character directly — this is guaranteed
-        to land in the focused control regardless of window class or framework.
-        """
-        try:
-            import ctypes
-
-            user32     = ctypes.windll.user32  # type: ignore[attr-defined]
-            WM_SETTEXT = 0x000C
-            BM_CLICK   = 0x00F5
-            path_str   = str(output_dir).rstrip("\\") + "\\"
-
-            print(f"[AutoRender] Setting path in Save As: {path_str}", flush=True)
-            logger.info("Configuring Save As 0x%x — path: %s", dialog_hwnd, path_str)
-
-            # Enumerate children once (re-using _children from _try_auto_render scope
-            # is not possible here, so inline the same pattern)
-            child_info: list[dict] = []
-            ChildProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
-
-            def _enum(hwnd, _):
-                cls  = ctypes.create_unicode_buffer(128)
-                text = ctypes.create_unicode_buffer(256)
-                user32.GetClassNameW(hwnd, cls, 128)
-                user32.GetWindowTextW(hwnd, text, 256)
-                child_info.append({"hwnd": hwnd, "cls": cls.value, "text": text.value})
-                return True
-
-            user32.EnumChildWindows(dialog_hwnd, ChildProc(_enum), 0)
-            for c in child_info:
-                print(f"  [child] cls={c['cls']!r} text={c['text']!r} hwnd=0x{c['hwnd']:x}", flush=True)
-                logger.info("Dialog child: cls=%r text=%r hwnd=0x%x", c["cls"], c["text"], c["hwnd"])
-
-            # ── Set the filename / folder path ─────────────────────────
-            # The Windows Save As has one or two Edit controls.  The filename
-            # field is always the FIRST 'Edit' child (NOT inside the address bar).
-            # We set the folder path: typing just a folder path + Enter navigates
-            # there; the second Enter (or Save click) confirms.
-            filename_edit = None
-            for c in child_info:
-                if c["cls"].lower() == "edit":
-                    filename_edit = c["hwnd"]
-                    break
-
-            # Check current folder. If already correct, skip path entry.
-            target_folder_name = Path(path_str.rstrip("\\")).name.lower()
-            already_correct_folder = False
-            for c in child_info:
-                if "address:" in c["text"].lower():
-                    if c["text"].lower().rstrip("\\").endswith(target_folder_name):
-                        already_correct_folder = True
-                        print(f"[AutoRender] Already in correct folder", flush=True)
-                    break
-
-            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
-
-            # When a Save As dialog opens, the filename Edit has focus by default.
-            # Use pywinauto send_keys (which routes through SendInput) so the
-            # dialog properly processes navigation + Save. WM_SETTEXT + WM_KEYDOWN
-            # bypasses Windows' dialog processing and doesn't actually navigate.
-            if not already_correct_folder:
-                # Select all in filename field, type full path, Enter to navigate
-                send_keys("^a")
-                if self._interruptible_sleep(0.05, stop_event):
-                    return False
-                # Escape special chars for send_keys: (){}[]+^%~
-                # Paths contain none of these typically, but backslash is safe
-                send_keys(path_str, with_spaces=True, pause=0.005)
-                print(f"[AutoRender] Typed path into filename field", flush=True)
-                if self._interruptible_sleep(0.1, stop_event):
-                    return False
-                send_keys("{ENTER}")          # navigate to folder
-                if self._interruptible_sleep(0.8, stop_event):
-                    return False
-                print("[AutoRender] Navigated via Enter", flush=True)
-
-            # Now click Save by pressing Enter again (default button is Save)
-            # OR use the Alt+S accelerator shortcut (&Save)
-            send_keys("%s")   # Alt+S — reliably clicks &Save button
-            print("[AutoRender] Sent Alt+S to click Save", flush=True)
-            logger.info("Sent Alt+S to trigger &Save")
-            return True
-
-        except Exception as e:
-            logger.warning("Dialog configuration failed: %s", e)
-            return False
-
-    def _try_auto_render(
-        self,
-        stop_event: threading.Event | None = None,
-        batch: bool = False,
-        output_dir: Path | None = None,
-    ) -> tuple[bool, str]:
-        """
-        Attempt to trigger FL Studio's WAV export using Windows PostMessage,
-        which sends key events directly to FL's window handle without changing
-        global keyboard focus. This avoids the browser-refresh bug caused by
-        pywinauto's send_keys / type_keys (both use global keyboard injection
-        under the hood and can hit the browser).
-
-        Requires pywinauto for window discovery only (finding FL's hwnd).
-        The actual key delivery uses ctypes PostMessage.
-
-        Returns (triggered: bool, message: str).
-        """
-        import sys
-        if sys.platform != "win32":
-            return False, "auto-render is Windows-only"
-
-        try:
-            from pywinauto import Desktop  # type: ignore[import-untyped]
-        except ImportError:
-            return False, "pywinauto not installed — using manual export flow"
-
-        try:
-            import ctypes
-            from pywinauto.keyboard import send_keys  # type: ignore[import-untyped]
-
-            desktop = Desktop(backend="uia")
-            fl_wins = [
-                w for w in desktop.windows()
-                if "FL Studio" in (w.window_text() or "")
-            ]
-            if not fl_wins:
-                return False, "FL Studio window not found"
-
-            fl_win = fl_wins[0]
-
-            # FL uses low-level input hooks and ignores PostMessage for shortcuts,
-            # so we must use global SendInput / send_keys. The risk was Ctrl+R
-            # hitting the browser instead of FL. We prevent that by:
-            # 1. Finding the Python console / taskbar window and confirming it's
-            #    not focused (belt-and-suspenders)
-            # 2. Explicitly setting FL as foreground via SetForegroundWindow (WIN32)
-            #    rather than pywinauto set_focus which can be unreliable
-            # 3. Waiting long enough for the focus to propagate before sending keys
-
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-            hwnd = fl_win.handle
-
-            # Windows blocks SetForegroundWindow for background processes.
-            # Workaround: AttachThreadInput temporarily joins this thread to FL's
-            # input queue, giving us permission to steal the foreground.
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-            fg_hwnd     = user32.GetForegroundWindow()
-            my_tid      = kernel32.GetCurrentThreadId()
-            fl_tid      = user32.GetWindowThreadProcessId(hwnd, None)
-            fg_tid      = user32.GetWindowThreadProcessId(fg_hwnd, None)
-
-            user32.AttachThreadInput(my_tid, fg_tid, True)
-            user32.AttachThreadInput(my_tid, fl_tid, True)
-            try:
-                user32.ShowWindow(hwnd, 9)        # SW_RESTORE
-                user32.SetForegroundWindow(hwnd)
-                user32.BringWindowToTop(hwnd)
-            finally:
-                user32.AttachThreadInput(my_tid, fg_tid, False)
-                user32.AttachThreadInput(my_tid, fl_tid, False)
-
-            if self._interruptible_sleep(0.6, stop_event):
-                return False, "Stopped by user"
-
-            # Confirm FL actually has focus before sending keys
-            fg = user32.GetForegroundWindow()
-            if fg != hwnd:
-                logger.warning("FL did not take foreground after AttachThreadInput — aborting auto-render")
-                return False, "Could not bring FL Studio to foreground — please export manually"
-
-            # initial_fg must be set AFTER FL is the foreground window.
-            initial_fg = user32.GetForegroundWindow()
-            print(f"[AutoRender] FL hwnd=0x{initial_fg:x}", flush=True)
-            logger.info("FL in foreground hwnd=0x%x", initial_fg)
-
-            def _children(hwnd: int) -> list[dict]:
-                info: list[dict] = []
-                Proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
-
-                def _cb(h, _):
-                    cls  = ctypes.create_unicode_buffer(128)
-                    text = ctypes.create_unicode_buffer(256)
-                    user32.GetClassNameW(h, cls, 128)
-                    user32.GetWindowTextW(h, text, 256)
-                    info.append({"hwnd": h, "cls": cls.value, "text": text.value})
-                    return True
-
-                user32.EnumChildWindows(hwnd, Proc(_cb), 0)
-                return info
-
-            def _is_save_dialog(hwnd: int) -> bool:
-                """True if this hwnd is a Windows Save As file dialog."""
-                for c in _children(hwnd):
-                    if c["text"].strip().lower() in ("&save", "save", "&open"):
-                        return True
-                return False
-
-            def _wait_for_save_dialog(timeout_s: float = 8.0) -> int | None:
-                """Poll until a Windows Save As dialog appears (any foreground window with &Save)."""
-                deadline = time.monotonic() + timeout_s
-                seen: set[int] = set()
-                while time.monotonic() < deadline:
-                    if stop_event and stop_event.is_set():
-                        return None
-                    time.sleep(0.15)
-                    fg = user32.GetForegroundWindow()
-                    if fg and fg not in seen:
-                        seen.add(fg)
-                        if _is_save_dialog(fg):
-                            print(f"[AutoRender] Save As dialog found: hwnd=0x{fg:x}", flush=True)
-                            logger.info("Save As dialog found: hwnd=0x%x", fg)
-                            return fg
-                return None
-
-            # BEFORE pressing Ctrl+R, check if there's already a stale Save As
-            # dialog open from a previous failed attempt. Check the CURRENT
-            # foreground (don't poll — just look at the state right now).
-            fg_now = user32.GetForegroundWindow()
-            if fg_now != initial_fg and _is_save_dialog(fg_now):
-                print(f"[AutoRender] Stale dialog open (0x{fg_now:x}) — dismissing", flush=True)
-                logger.info("Stale dialog detected, dismissing with Escape")
-                send_keys("{ESCAPE}")
-                if self._interruptible_sleep(0.5, stop_event):
-                    return False, "Stopped by user"
-                # Re-focus FL for the Ctrl+R
-                user32.SetForegroundWindow(hwnd)
-                if self._interruptible_sleep(0.3, stop_event):
-                    return False, "Stopped by user"
-
-            print("[AutoRender] Pressing Ctrl+R to open export dialog", flush=True)
-            send_keys("^r")
-
-            print("[AutoRender] Waiting for Windows Save As dialog...", flush=True)
-            dialog_hwnd = _wait_for_save_dialog(timeout_s=8.0)
-
-            if dialog_hwnd is None:
-                print("[AutoRender] Save As dialog not detected — trying Enter fallback", flush=True)
-                logger.warning("Save As dialog not detected after 8s")
-                send_keys("{ENTER}")
-                dialog_hwnd = _wait_for_save_dialog(timeout_s=4.0)
-                if dialog_hwnd is None:
-                    print("[AutoRender] Giving up — no Save As dialog appeared", flush=True)
-                    return True, "Ctrl+R sent but Save As dialog not detected"
-
-            print(f"[AutoRender] Configuring dialog hwnd=0x{dialog_hwnd:x}", flush=True)
-
-            # Give the dialog a moment to fully render
-            if self._interruptible_sleep(0.4, stop_event):
-                return False, "Stopped by user"
-
-            # Callers now pass output_dir explicitly because the stem-vs-master
-            # decision is owned by the prepare_* function, not here. The legacy
-            # batch flag only controls stage-2 dialog handling (batch export
-            # offers a different confirmation path). Fall back on stems_dir if
-            # no output_dir was provided — that's always safe because nothing
-            # currently auto-renders masters (prepare_master is manual-only).
-            if output_dir is None:
-                output_dir = self._project.stems_dir
-
-            configured = self._configure_export_dialog(
-                desktop, dialog_hwnd, output_dir, batch=batch, stop_event=stop_event
-            )
-            if stop_event and stop_event.is_set():
-                return False, "Stopped by user"
-            if not configured:
-                print("[AutoRender] Dialog config failed — sending Enter", flush=True)
-                send_keys("{ENTER}")
-
-            # ── STAGE 2: FL's render settings dialog (if any) ──────────
-            # After Save As closes, FL MAY show a render settings dialog with
-            # Mode/Quality and a Start button. Rather than fight with complex
-            # window detection (the dialog often doesn't take foreground reliably),
-            # we just send Enter after a delay. Most dialogs default to the Start
-            # button, so Enter confirms. If no dialog, Enter to FL's main window
-            # is harmless.
-            print("[AutoRender] STAGE 2: Waiting for FL render settings (if any)", flush=True)
-            if self._interruptible_sleep(1.5, stop_event):
-                return True, "Save As closed, but stopped"
-
-            # Send Enter — confirms the Start button in FL's settings dialog if open
-            print("[AutoRender] STAGE 2: Sending Enter to click Start (default button)", flush=True)
-            send_keys("{ENTER}")
-            if self._interruptible_sleep(0.3, stop_event):
-                return True, "Save As closed, but stopped before stage-2 confirm"
-            # Belt-and-suspenders: send Enter a second time in case there's any
-            # additional confirmation dialog (e.g., "overwrite existing file?")
-            send_keys("{ENTER}")
-            logger.info("Stage 2: sent Enter twice to click Start / confirm")
-
-            logger.info("Auto-render triggered via SetForegroundWindow + dialog config (batch=%s)", batch)
-            return True, "Export triggered automatically — watching for the file to land."
-        except Exception as e:
-            return False, f"Auto-render failed ({e}) — please export manually"
-
-    def prepare_stem(self, track_id: int, stop_event: threading.Event | None = None) -> dict:
+    def prepare_stem(self, track_id: int) -> dict:
         """Solo the track, write a pending stem entry, return the user instruction."""
         track_state = self._fl.read_mixer_track(track_id)
         track_name = track_state.get("name") or f"track_{track_id}"
@@ -837,24 +549,11 @@ class WorkspaceSession:
             )
             self._project.save_manifest(self._manifest)
 
-        auto_ok, auto_msg = self._try_auto_render(
-            stop_event=stop_event,
-            batch=False,
-            output_dir=self._project.stems_dir,
+        instruction = (
+            f"Track {track_id} ({track_name}) is soloed in FL. "
+            f"In FL Studio: Ctrl+R → Start → save as '{filename}' "
+            f"into: {self._project.stems_dir}"
         )
-
-        if auto_ok:
-            instruction = (
-                f"Track {track_id} ({track_name}) is soloed and export was triggered automatically. "
-                f"{auto_msg} Expected file: {filename}"
-            )
-        else:
-            instruction = (
-                f"Track {track_id} ({track_name}) is soloed in FL. "
-                f"In FL Studio: Ctrl+R → Start → save as '{filename}' "
-                f"into: {self._project.stems_dir}  "
-                f"({auto_msg})"
-            )
 
         return {
             "ok": True,
@@ -865,11 +564,10 @@ class WorkspaceSession:
             "filename": filename,
             "full_path": str(full_path),
             "stems_dir": str(self._project.stems_dir),
-            "auto_render_attempted": auto_ok,
             "instruction": instruction,
         }
 
-    def prepare_batch_render(self, include_master: bool = True, stop_event: threading.Event | None = None) -> dict:
+    def prepare_batch_render(self, include_master: bool = True) -> dict:
         """
         Write pending entries for every active mixer track (and optionally master)
         so the user can do one FL batch export instead of 20 per-track renders.
@@ -924,28 +622,13 @@ class WorkspaceSession:
 
         master_info = self.prepare_master() if include_master else None
 
-        auto_ok, auto_msg = self._try_auto_render(
-            stop_event=stop_event,
-            batch=True,
-            output_dir=self._project.stems_dir,
+        instruction = (
+            f"Batch-render {len(tracks_prepared)} tracks in one FL export:\n"
+            f"  1. File -> Export -> WAV\n"
+            f"  2. Mode: 'Tracks (separate audio files)'\n"
+            f"  3. Output folder: {self._project.stems_dir}\n"
+            f"  4. Start."
         )
-
-        if auto_ok:
-            instruction = (
-                f"Batch export triggered automatically for {len(tracks_prepared)} tracks. "
-                f"{auto_msg} "
-                "FL will create one file per mixer track. The master is auto-detected "
-                "and moved to masters/."
-            )
-        else:
-            instruction = (
-                f"Batch-render {len(tracks_prepared)} tracks in one FL export:\n"
-                f"  1. File -> Export -> WAV\n"
-                f"  2. Mode: 'Tracks (separate audio files)'\n"
-                f"  3. Output folder: {self._project.stems_dir}\n"
-                f"  4. Start.\n"
-                f"({auto_msg})"
-            )
 
         return {
             "ok": True,
@@ -957,11 +640,10 @@ class WorkspaceSession:
             "master": master_info,
             "stems_dir": str(self._project.stems_dir),
             "masters_dir": str(self._project.masters_dir),
-            "auto_render_attempted": auto_ok,
             "instruction": instruction,
         }
 
-    def prepare_master(self, stop_event: threading.Event | None = None) -> dict:
+    def prepare_master(self) -> dict:
         """Un-solo everything, write a pending master entry, return the user instruction."""
         # Clear any solo state so the master reflects the full mix
         try:
