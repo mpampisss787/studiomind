@@ -42,8 +42,88 @@ STATIC_DIR = Path(__file__).parent / "static"
 # the running agent without touching the WebSocket.
 _active_stop_event: threading.Event | None = None
 
+# Every connected client's WebSocket — used to broadcast `file_dropped`
+# events so any open tab sees the routing pill in its chat thread.
+_active_websockets: "set[WebSocket]" = set()
+
 app = FastAPI(title="StudioMind")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+_VALID_DROP_FOLDERS = ("stems", "masters", "references", "drops")
+
+
+def _folder_dir(project, folder: str) -> Path:
+    """Resolve a folder name (`stems`, `masters`, etc.) to its Path on the project."""
+    return {
+        "stems": project.stems_dir,
+        "masters": project.masters_dir,
+        "references": project.references_dir,
+        "drops": project.drops_dir,
+    }[folder]
+
+
+def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> tuple[str, str]:
+    """Return `(folder, classification_reason)` for a freshly-dropped file.
+
+    Order of precedence:
+      1. Explicit `intent_hint` from the UI / agent context
+      2. Filename heuristics (master/mix/bounce → masters, ref → references)
+      3. Audio-info heuristics for native formats (long stereo → references,
+         short mono → drops as a sample)
+      4. Default → `drops/`
+    """
+    if intent_hint == "reference":
+        return "references", "agent_or_ui_hinted_reference"
+    if intent_hint == "master":
+        return "masters", "agent_or_ui_hinted_master"
+    if intent_hint == "stem":
+        return "stems", "agent_or_ui_hinted_stem"
+
+    name_lower = filename.lower()
+    stem_lower = Path(filename).stem.lower()
+
+    if (
+        "master" in stem_lower
+        or stem_lower.endswith("_mix")
+        or "bounce" in stem_lower
+        or "_mixdown" in stem_lower
+    ):
+        return "masters", "filename_match_master"
+
+    if stem_lower.startswith("ref_") or "_ref" in stem_lower or "reference" in stem_lower:
+        return "references", "filename_match_reference"
+
+    # Audio-info heuristics (native formats only — non-WAV needs ffmpeg-decode
+    # to inspect duration; we skip that on the hot path).
+    suffix = Path(filename).suffix.lower()
+    if suffix in (".wav", ".flac", ".aiff", ".aif", ".ogg"):
+        try:
+            import io
+            import soundfile as _sf
+            info = _sf.info(io.BytesIO(contents))
+            duration = float(info.duration)
+            channels = int(info.channels)
+            if channels >= 2 and duration > 60:
+                return "references", "long_stereo_likely_full_song"
+            if channels == 1 and duration < 5:
+                return "drops", "short_mono_likely_sample"
+        except Exception:
+            pass  # fall through to default
+
+    return "drops", "no_clear_signal"
+
+
+async def _broadcast_event(event: dict) -> None:
+    """Push a JSON event to every connected client. Drops dead sockets."""
+    dead: list[WebSocket] = []
+    for ws in list(_active_websockets):
+        try:
+            await ws.send_json(event)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _active_websockets.discard(ws)
 
 
 @app.get("/")
@@ -213,6 +293,11 @@ async def workspace_status():
         if project.references_dir.exists()
         else []
     )
+    drops = (
+        sorted(p.name for p in project.drops_dir.iterdir() if p.is_file())
+        if project.drops_dir.exists()
+        else []
+    )
 
     # Sanitize any legacy -inf/nan values in existing analysis dicts so JSON
     # encoding doesn't explode on records written before the analyzer had a
@@ -235,35 +320,115 @@ async def workspace_status():
         "stems_dir": str(project.stems_dir),
         "masters_dir": str(project.masters_dir),
         "references_dir": str(project.references_dir),
+        "drops_dir": str(project.drops_dir),
         "stems": stems,
         "masters": masters,
         "references": references,
+        "drops": drops,
     })
 
 
-@app.post("/api/workspace/reference")
-async def upload_reference(file: UploadFile = File(...)):
+@app.post("/api/workspace/upload")
+async def upload_audio(
+    file: UploadFile = File(...),
+    target_folder: str | None = None,
+    intent_hint: str | None = None,
+):
+    """Smart-routed audio drop endpoint.
+
+    `target_folder` (optional, one of `stems` / `masters` / `references` /
+    `drops`) skips the classifier. `intent_hint` lets the UI pass agent
+    context (e.g. "reference") for soft routing without hard-coding a
+    folder. Default behaviour is the auto-classifier.
+
+    Returns `{folder, filename, classification_reason, alternative_folders,
+    size_bytes}`. Broadcasts a `file_dropped` event on the WebSocket so any
+    open chat thread can render its routing pill.
+    """
+    from studiomind.ingest.decode import is_supported
+
     project, err = _resolve_active_project()
     if project is None:
         raise HTTPException(status_code=404, detail=err or "No active project.")
 
-    # Only accept audio files. Lightweight extension check.
-    allowed = {".wav", ".mp3", ".flac", ".aiff", ".aif", ".ogg", ".m4a"}
-    filename = Path(file.filename or "reference.wav").name  # strip any path components
-    if Path(filename).suffix.lower() not in allowed:
+    filename = Path(file.filename or "drop.wav").name  # strip path components
+    if not is_supported(filename):
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported audio type. Allowed: {', '.join(sorted(allowed))}",
+            detail=f"Unsupported audio type: {Path(filename).suffix or '(none)'}.",
         )
 
-    target = project.references_dir / filename
     contents = await file.read()
-    # 100 MB cap for safety (long reference tracks are ~50 MB in WAV)
-    if len(contents) > 100 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="File too large (max 100 MB).")
-    target.write_bytes(contents)
+    # 200 MB cap (covers a long stereo reference WAV)
+    if len(contents) > 200 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 200 MB).")
 
-    return {"ok": True, "filename": filename, "path": str(target), "size": len(contents)}
+    if target_folder and target_folder in _VALID_DROP_FOLDERS:
+        folder, reason = target_folder, "user_override"
+    else:
+        folder, reason = _classify_drop(filename, contents, intent_hint)
+
+    target_dir = _folder_dir(project, folder)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest = target_dir / filename
+    dest.write_bytes(contents)
+
+    payload = {
+        "ok": True,
+        "filename": filename,
+        "folder": folder,
+        "path": str(dest),
+        "classification_reason": reason,
+        "alternative_folders": [f for f in _VALID_DROP_FOLDERS if f != folder],
+        "size_bytes": len(contents),
+    }
+
+    await _broadcast_event({"type": "file_dropped", **payload})
+    return payload
+
+
+@app.post("/api/workspace/reference")
+async def upload_reference(file: UploadFile = File(...)):
+    """Backward-compatible alias: always routes the file to `references/`."""
+    return await upload_audio(file=file, target_folder="references", intent_hint=None)
+
+
+class RelocateBody(BaseModel):
+    filename: str
+    from_folder: str
+    to_folder: str
+
+
+@app.post("/api/workspace/relocate")
+async def relocate_drop(body: RelocateBody):
+    """Move a file between drop folders (used by the UI's override pill)."""
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+
+    if body.from_folder not in _VALID_DROP_FOLDERS or body.to_folder not in _VALID_DROP_FOLDERS:
+        raise HTTPException(status_code=400, detail="Invalid folder name.")
+
+    name = Path(body.filename).name  # path-traversal guard
+    src = _folder_dir(project, body.from_folder) / name
+    dst_dir = _folder_dir(project, body.to_folder)
+    dst = dst_dir / name
+
+    if not src.exists() or not src.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"File not found: {body.from_folder}/{name}",
+        )
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    src.replace(dst)
+
+    await _broadcast_event({
+        "type": "file_relocated",
+        "filename": name,
+        "from_folder": body.from_folder,
+        "to_folder": body.to_folder,
+    })
+    return {"ok": True, "filename": name, "from": body.from_folder, "to": body.to_folder}
 
 
 @app.get("/api/workspace/notes")
@@ -323,6 +488,7 @@ async def delete_reference(filename: str):
 @app.websocket("/ws")
 async def websocket_chat(ws: WebSocket):
     await ws.accept()
+    _active_websockets.add(ws)
     loop = asyncio.get_event_loop()
 
     # Gate 1: API key must be configured before we even try to connect.
@@ -467,6 +633,7 @@ async def websocket_chat(ws: WebSocket):
     except WebSocketDisconnect:
         logger.info("Client disconnected")
     finally:
+        _active_websockets.discard(ws)
         # Auto-save the agent's last response to history.md so the NEXT session
         # can read it and pick up where this one left off — even if the agent
         # never got a chance to call write_history_entry itself (e.g., connection

@@ -9,6 +9,7 @@ Each tool has:
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any
 
 from studiomind.bridge.commands import FLStudio
@@ -563,6 +564,93 @@ TOOL_SCHEMAS = [
             "required": ["track_id", "slot", "band"],
         },
     },
+    # ── Drill-down tools (read cached STFT, no re-render) ──────────
+    {
+        "name": "find_resonances",
+        "description": (
+            "Find spectral peaks in a cached audio file. Returns up to top_n peaks with "
+            "exact Hz, dB level, prominence, and Q-estimate — surgical EQ targets that "
+            "the 7-band summary can't pinpoint. Reads the analysis cache; no re-render "
+            "needed. Use when the user asks 'what's resonating at X Hz?' or before "
+            "placing a precise narrow cut."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the audio file."},
+                "min_prominence_db": {
+                    "type": "number",
+                    "description": "Minimum peak prominence in dB (default 6.0). Higher = stricter.",
+                },
+                "top_n": {
+                    "type": "integer",
+                    "description": "Maximum number of peaks to return (default 5).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "analyze_section",
+        "description": (
+            "Run the analyzer on a TIME SLICE of an already-ingested file. Use when the "
+            "user asks about a specific section ('how's the chorus sounding?') instead "
+            "of the whole file. Decodes if needed, slices to [start_s, end_s], returns "
+            "a summary plus a `section` field. Doesn't write to cache."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the audio file."},
+                "start_s": {"type": "number", "description": "Section start in seconds."},
+                "end_s": {"type": "number", "description": "Section end in seconds."},
+            },
+            "required": ["path", "start_s", "end_s"],
+        },
+    },
+    {
+        "name": "compare_stems",
+        "description": (
+            "Time-aware masking comparison between two cached stems. Only flags band "
+            "conflicts where both stems are loud in the SAME frames — won't flag verse-"
+            "only and chorus-only instruments that share a band. Returns a list of "
+            "conflicts with overlap_seconds and severity. Reads the cache, no re-render."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path_a": {"type": "string"},
+                "path_b": {"type": "string"},
+                "threshold_db": {
+                    "type": "number",
+                    "description": "Per-band loudness threshold (default -40 dB).",
+                },
+                "min_overlap_s": {
+                    "type": "number",
+                    "description": "Ignore conflicts shorter than this (default 0.5 s).",
+                },
+            },
+            "required": ["path_a", "path_b"],
+        },
+    },
+    {
+        "name": "compare_to_reference",
+        "description": (
+            "Compare a track's spectral envelope to a reference's, in 1/3-octave bands. "
+            "Loudness-normalizes the two so absolute level differences don't dominate. "
+            "Returns per-band delta in dB (~31 entries) and a one-line summary of the "
+            "biggest hot/shy bands. Use when the user wants 'make this sound like that' "
+            "guidance. The reference must be in the workspace's references/ folder."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track_path": {"type": "string"},
+                "reference_path": {"type": "string"},
+            },
+            "required": ["track_path", "reference_path"],
+        },
+    },
 ]
 
 # ═══════════════════════════════════════════════════════════════════
@@ -726,10 +814,61 @@ class ToolExecutor:
         return result
 
     def _exec_analyze_audio(self, params: dict) -> Any:
-        from studiomind.analyzer.spectral import analyze_audio
+        from studiomind.analyzer.pipeline import analyze_and_cache
 
-        result = analyze_audio(params["path"])
-        return result.to_dict()
+        ws = self._workspace
+        analyses_dir = (
+            ws.project.analyses_dir if ws is not None
+            else Path(params["path"]).parent / ".studiomind" / "analyses"
+        )
+        return analyze_and_cache(params["path"], analyses_dir).to_dict()
+
+    def _exec_find_resonances(self, params: dict) -> Any:
+        from studiomind.analyzer.drilldown import find_resonances
+
+        ws = self._require_workspace()
+        return {
+            "path": params["path"],
+            "resonances": find_resonances(
+                params["path"],
+                ws.project.analyses_dir,
+                min_prominence_db=float(params.get("min_prominence_db", 6.0)),
+                top_n=int(params.get("top_n", 5)),
+            ),
+        }
+
+    def _exec_analyze_section(self, params: dict) -> Any:
+        from studiomind.analyzer.drilldown import analyze_section
+
+        ws = self._require_workspace()
+        return analyze_section(
+            params["path"],
+            ws.project.analyses_dir,
+            start_s=float(params["start_s"]),
+            end_s=float(params["end_s"]),
+        )
+
+    def _exec_compare_stems(self, params: dict) -> Any:
+        from studiomind.analyzer.drilldown import compare_stems
+
+        ws = self._require_workspace()
+        return compare_stems(
+            params["path_a"],
+            params["path_b"],
+            ws.project.analyses_dir,
+            threshold_db=float(params.get("threshold_db", -40.0)),
+            min_overlap_s=float(params.get("min_overlap_s", 0.5)),
+        )
+
+    def _exec_compare_to_reference(self, params: dict) -> Any:
+        from studiomind.analyzer.reference import compare_to_reference
+
+        ws = self._require_workspace()
+        return compare_to_reference(
+            params["track_path"],
+            params["reference_path"],
+            ws.project.analyses_dir,
+        )
 
     def _exec_set_proq3(self, params: dict) -> Any:
         from studiomind.plugins.fabfilter_proq3 import build_eq_commands, param_to_freq, param_to_gain, param_to_q

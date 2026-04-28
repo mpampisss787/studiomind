@@ -1110,9 +1110,96 @@
       margin-top: 8px;
       min-height: 18px;
     }
+
+    /* ── Drop zone (added 2026-04-27) ─────────────────────────── */
+    .drop-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 10, 10, 0.78);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      pointer-events: none;
+      transition: opacity 0.12s ease;
+    }
+    .drop-overlay.active {
+      display: flex;
+      pointer-events: auto;
+    }
+    .drop-overlay-card {
+      border: 2px dashed rgba(255, 255, 255, 0.5);
+      border-radius: 16px;
+      padding: 48px 64px;
+      background: rgba(20, 20, 20, 0.85);
+      text-align: center;
+      max-width: 520px;
+    }
+    .drop-overlay-card h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+    .drop-overlay-card p {
+      margin: 0;
+      opacity: 0.65;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .drop-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(80, 110, 200, 0.18);
+      border: 1px solid rgba(120, 160, 240, 0.35);
+      font-size: 13px;
+      color: #c0d0ff;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s ease;
+      position: relative;
+    }
+    .drop-pill:hover { background: rgba(80, 110, 200, 0.28); }
+    .drop-pill .pill-folder { font-weight: 600; }
+    .drop-pill .pill-arrow { opacity: 0.5; }
+    .drop-pill-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      background: #1a1a1a;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 4px 0;
+      min-width: 180px;
+      z-index: 9100;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+    .drop-pill-menu button {
+      display: block;
+      width: 100%;
+      padding: 8px 14px;
+      background: none;
+      border: none;
+      color: #ddd;
+      text-align: left;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .drop-pill-menu button:hover { background: rgba(255, 255, 255, 0.06); }
   </style>
 </head>
 <body>
+
+  <div class="drop-overlay" id="dropOverlay" aria-hidden="true">
+    <div class="drop-overlay-card">
+      <h2>Drop audio anywhere</h2>
+      <p>WAV / FLAC / AIFF / OGG / MP3 / M4A / AAC / OPUS — auto-routed by intent. Change the destination after dropping if needed.</p>
+    </div>
+  </div>
 
   <div class="header">
     <div class="header-icon">S</div>
@@ -1539,6 +1626,13 @@
           isProcessing = false;
           sendBtn.disabled = false;
           inputBox.focus();
+        }
+        else if (data.type === 'file_dropped') {
+          renderDropPill(data);
+        }
+        else if (data.type === 'file_relocated') {
+          // Update any matching pill on the page in-place
+          updatePillFolder(data.filename, data.to_folder);
         }
 
         scrollToBottom();
@@ -2184,6 +2278,144 @@
 
     sbNotesBtn.addEventListener('click', () => openNotesPanel('notes'));
     sbHistoryBtn.addEventListener('click', () => openNotesPanel('history'));
+
+    // ── Drop zone (added 2026-04-27) ──────────────────────────────
+    const dropOverlay = document.getElementById('dropOverlay');
+    const ALL_FOLDERS = ['stems', 'masters', 'references', 'drops'];
+    let dragDepth = 0;
+
+    function isFileDrag(e) {
+      // Browsers signal a file-drag via dataTransfer.types containing "Files".
+      return e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    }
+
+    document.addEventListener('dragenter', (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      dropOverlay.classList.add('active');
+    });
+    document.addEventListener('dragover', (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('dragleave', (e) => {
+      if (!isFileDrag(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropOverlay.classList.remove('active');
+    });
+    document.addEventListener('drop', async (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      dropOverlay.classList.remove('active');
+      const files = Array.from(e.dataTransfer.files || []);
+      for (const f of files) {
+        await uploadDroppedFile(f);
+      }
+    });
+
+    async function uploadDroppedFile(file) {
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch('/api/workspace/upload', { method: 'POST', body: form });
+        if (!res.ok) {
+          const txt = await res.text();
+          addMessage('error', `Upload failed: ${file.name} — ${txt}`);
+          return;
+        }
+        const data = await res.json();
+        // Server also broadcasts a file_dropped event over WS that renders the
+        // pill, so we don't double-render here. (Backed by _broadcast_event.)
+        return data;
+      } catch (err) {
+        addMessage('error', `Upload error for ${file.name}: ${err.message}`);
+      }
+    }
+
+    function renderDropPill(data) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'msg msg-system';
+      wrapper.style.justifyContent = 'flex-start';
+      const pill = document.createElement('span');
+      pill.className = 'drop-pill';
+      pill.dataset.filename = data.filename;
+      pill.dataset.folder = data.folder;
+      pill.innerHTML = `
+        <span>📎 ${escapeHtml(data.filename)}</span>
+        <span class="pill-arrow">→</span>
+        <span class="pill-folder">${escapeHtml(data.folder)}/</span>
+        <span class="pill-arrow">▾</span>
+      `;
+      pill.addEventListener('click', (ev) => openPillMenu(ev, pill));
+      wrapper.appendChild(pill);
+      messagesEl.appendChild(wrapper);
+      scrollToBottom();
+    }
+
+    function openPillMenu(ev, pill) {
+      ev.stopPropagation();
+      // Close any existing menu
+      document.querySelectorAll('.drop-pill-menu').forEach(m => m.remove());
+
+      const current = pill.dataset.folder;
+      const filename = pill.dataset.filename;
+      const menu = document.createElement('div');
+      menu.className = 'drop-pill-menu';
+      ALL_FOLDERS.filter(f => f !== current).forEach(f => {
+        const btn = document.createElement('button');
+        btn.textContent = `Move to ${f}/`;
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          menu.remove();
+          await relocateDrop(filename, current, f);
+        });
+        menu.appendChild(btn);
+      });
+      pill.appendChild(menu);
+
+      const closeOnOutside = (e) => {
+        if (!menu.contains(e.target)) {
+          menu.remove();
+          document.removeEventListener('click', closeOnOutside);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeOnOutside), 0);
+    }
+
+    async function relocateDrop(filename, fromFolder, toFolder) {
+      try {
+        const res = await fetch('/api/workspace/relocate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, from_folder: fromFolder, to_folder: toFolder }),
+        });
+        if (!res.ok) {
+          addMessage('error', `Relocate failed: ${await res.text()}`);
+          return;
+        }
+        // The server broadcasts file_relocated; updatePillFolder runs from there.
+      } catch (err) {
+        addMessage('error', `Relocate error: ${err.message}`);
+      }
+    }
+
+    function updatePillFolder(filename, newFolder) {
+      const pills = document.querySelectorAll(`.drop-pill[data-filename="${CSS.escape(filename)}"]`);
+      pills.forEach(p => {
+        p.dataset.folder = newFolder;
+        const folderEl = p.querySelector('.pill-folder');
+        if (folderEl) folderEl.textContent = `${newFolder}/`;
+      });
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
 
     // Boot: check settings, open modal if needed, then connect
     (async () => {

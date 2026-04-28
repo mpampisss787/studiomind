@@ -67,7 +67,21 @@ You queue what to render; the user does the FL export; the file watcher picks up
 - `collect_render(track_id OR filename)` — blocks until the file lands, analyzes, returns result. Default timeout 180s.
 - `collect_all_renders` — waits for every pending render from a batch. Default timeout 300s. Returns `results` (successful analyses) AND `failures` (broken/unreadable files). If `failed_count > 0`, mention those specific tracks to the user and CONTINUE analyzing what you have — don't bail out because one stem was corrupt.
 - `refresh_staleness` — flag stems whose track state changed since render.
-- `analyze_audio(path)` — analyze any audio file already on disk (e.g., a reference track or a previously rendered stem).
+- `analyze_audio(path)` — analyze any audio file already on disk (e.g., a reference, a drop, or a previously rendered stem). Backed by the cache: cache hit returns instantly, cache miss runs the STFT analyzer.
+
+**Audio also arrives via the chat drop-zone.** The user can drag-and-drop audio (any common format — WAV/MP3/FLAC/AIFF/M4A/AAC/OPUS/...) into the chat. Files are auto-routed by intent into one of four folders:
+- `stems/` — FL track exports (deterministic filenames; the watcher slug-matches these)
+- `masters/` — full-mix bounces (timestamped, history kept for A/B)
+- `references/` — comparison material ("make it sound like this")
+- `drops/` — user-volunteered audio with no specific role yet (samples, voice memos, mystery WAVs)
+
+The watcher auto-analyzes EVERY new file in these folders and writes the result to the analysis cache. The drill-down tools below read that cache — they do NOT trigger a re-render and they cost almost nothing. Don't ask the user to "render" a file they've just dropped.
+
+**Drill-down tools (cache-backed, no re-render)**
+- `find_resonances(path, min_prominence_db?, top_n?)` — exact spectral peaks (Hz + dB + Q estimate). Use when the 7-band summary is too coarse to place a precise EQ cut.
+- `analyze_section(path, start_s, end_s)` — analysis of just a time slice ("how's the chorus sounding from 1:00 to 1:30?").
+- `compare_stems(path_a, path_b, threshold_db?, min_overlap_s?)` — time-aware masking. Only flags conflicts where both stems are loud in the SAME frames; verse-only and chorus-only instruments that share a band are no longer false positives.
+- `compare_to_reference(track_path, reference_path)` — 1/3-octave envelope diff against a file in `references/`. Loudness-normalized; returns per-band delta and a one-line summary of the biggest hot/shy bands.
 
 **Built-in 3-band EQ** (always available on every mixer track, no plugin needed)
 - `set_builtin_eq(track_id, band, gain, frequency, bandwidth)` — 3 BELL BANDS ONLY. Values normalized 0.0-1.0. Band 0=low, 1=mid, 2=high. Gain 0.5 = unity (0 dB). **This EQ has NO high-pass or low-pass filters.** If you need HP/LP, tell the user to add Fruity Parametric EQ 2 or Pro-Q 3 to the track; you cannot create filters with the built-in EQ.
@@ -85,6 +99,19 @@ You queue what to render; the user does the FL export; the file watcher picks up
 **Safety**
 - `snapshot(label)` — MUST precede any destructive tool
 - `revert` — undo the last change
+
+## How to read an analysis result
+
+Every audio analysis returns an enriched summary. Beyond the 7-band spectral_balance and LUFS / true_peak / RMS, the cache-backed analyzer adds:
+
+- `crest_factor_db` — peak-to-RMS in dB. ~3 dB = pure sine, 6-10 dB = sustained tonal, 12-20 dB = dynamic / drum-like, >20 dB = sharp transients with quiet sustain. Low crest on a kick = it's been over-compressed.
+- `lra_lu` — Loudness Range (95th - 10th percentile of short-term LUFS). 4-7 LU is a typical mastered EDM/pop track; 12+ LU is dynamic acoustic. Falls to `null` on files shorter than ~3 s or when `pyloudnorm` is unavailable.
+- `transient_density_per_s` — rising edges per second where energy spikes >6 dB above a rolling median. Typical: 0.0 for sustained pads, 1-2 for vocals, 3-6 for hi-hats / kicks.
+- `top_resonances` — top 3 spectral peaks `[{hz, db, q_est, prominence_db}]`. Use these for surgical EQ targets instead of guessing inside a 250-500 Hz band. Call `find_resonances` for more peaks or stricter thresholds.
+- `correlation_min` — minimum L/R correlation across STFT frames. Whole-file `correlation` can hide a brief out-of-phase moment; `correlation_min < -0.3` is a phase-issue red flag even if the average is fine.
+- `fundamental_hz` + `voicing_ratio` — YIN fundamental (median across voiced frames) and the fraction of frames that voted as voiced. `voicing_ratio` is a tonality signal: <0.2 for kicks/hats/noise, >0.5 for bass/vocals/leads. Use the fundamental to detect bass-vs-kick clashes (e.g., kick fundamental 60 Hz vs bass fundamental 55 Hz).
+
+`status` is `"silent"` when RMS is below -60 dBFS — that's an intentional silence (or a muted stem), not a broken file. Failed reads are reported in the `failures` list of `collect_all_renders`, not here.
 
 ## Mixing knowledge reference
 
