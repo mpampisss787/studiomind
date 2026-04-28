@@ -64,6 +64,10 @@ def analyze_and_cache(
             stft_mag=stft_mag,
             stft_params=stft_params,
         )
+    except FileNotFoundError as e:
+        # File was moved/deleted between when analysis was queued and when it
+        # ran — common race after UI relocations. Not an error.
+        logger.debug("Skipping cache write for %s (no longer at path): %s", wav_path.name, e)
     except Exception as e:
         # Cache failure should never break the caller — analysis is the
         # value, the cache is a perf optimization.

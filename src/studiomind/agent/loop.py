@@ -118,6 +118,7 @@ class AgentLoop:
         self._stop_event = threading.Event()
         self._executor = ToolExecutor(fl, workspace=workspace, stop_event=self._stop_event)
         self._action_log = ActionLog()
+        self._last_text_response: str = ""  # set here so disconnect-before-first-run doesn't crash
 
     @property
     def action_log(self) -> ActionLog:
@@ -311,7 +312,7 @@ class AgentLoop:
             The agent's final text response (summary of what was done)
         """
         self._action_log = ActionLog()
-        self._last_text_response: str = ""
+        self._last_text_response = ""
         self._stop_event.clear()
 
         system = build_system_prompt()

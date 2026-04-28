@@ -458,6 +458,11 @@ class WorkspaceSession:
         # watcher skip a full `np.load` of the .npz on every tick once a file's
         # cache state is known. Invalidated automatically by mtime drift.
         self._ingest_verified_mtime: dict[str, float] = {}
+        # Persistent skip list — (filename, mtime) pairs that exhausted all
+        # retry attempts. Written to .studiomind/ingest_skip.json so the next
+        # server startup doesn't re-hammer locked/broken files. Cleared per-key
+        # when the file's mtime changes (re-export refreshes the content).
+        self._ingest_skip: dict[str, float] = self._load_ingest_skip()
 
     @property
     def project(self) -> Project:
@@ -951,6 +956,28 @@ class WorkspaceSession:
     # Don't retry an ingest attempt more than this many times per (path, mtime).
     # Files that fail repeatedly (corrupt MP3, etc.) shouldn't burn CPU forever.
     _INGEST_MAX_ATTEMPTS = 3
+    _INGEST_SKIP_FILE = ".studiomind/ingest_skip.json"
+
+    def _load_ingest_skip(self) -> dict[str, float]:
+        """Load persisted (filename → mtime) skip entries from disk."""
+        path = self._project.root / self._INGEST_SKIP_FILE
+        try:
+            import json as _json
+            return _json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _save_ingest_skip(self) -> None:
+        """Persist the current skip list to disk (atomic write)."""
+        try:
+            import json as _json
+            path = self._project.root / self._INGEST_SKIP_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(_json.dumps(self._ingest_skip), encoding="utf-8")
+            tmp.replace(path)
+        except Exception as e:
+            logger.debug("Could not save ingest skip list: %s", e)
 
     def _scan_for_ingest(self) -> None:
         """Walk all four ingest dirs and analyze+cache anything not already cached.
@@ -999,15 +1026,25 @@ class WorkspaceSession:
                     self._ingest_verified_mtime[key] = mtime
                     continue
 
+                # Skip files that exhausted all attempts in a prior startup,
+                # unless the file has been re-exported (mtime changed).
+                if self._ingest_skip.get(key) == mtime:
+                    continue
+
                 last_mtime, attempts = self._ingest_attempts.get(key, (0.0, 0))
                 if mtime != last_mtime:
                     attempts = 0  # file changed → fresh attempt budget
+                    self._ingest_skip.pop(key, None)  # file refreshed, try again
                 if attempts >= self._INGEST_MAX_ATTEMPTS:
+                    # Persist exhaustion so next startup skips immediately.
+                    self._ingest_skip[key] = mtime
+                    self._save_ingest_skip()
                     continue
 
                 try:
                     analyze_and_cache(f, analyses_dir)
                     self._ingest_attempts.pop(key, None)
+                    self._ingest_skip.pop(key, None)
                     self._ingest_verified_mtime[key] = mtime
                     logger.debug("Auto-analyzed %s", f.name)
                 except Exception as e:
