@@ -33,6 +33,12 @@ from studiomind.config import (
     set_anthropic_key,
     set_model,
 )
+from studiomind.logging_setup import configure_session_logging
+
+# Idempotent — covers uvicorn reload-mode forks where the child never went
+# through the CLI's main(). Returns immediately if the file handler is
+# already installed.
+configure_session_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +131,18 @@ def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> t
 
 async def _broadcast_event(event: dict) -> None:
     """Push a JSON event to every connected client. Drops dead sockets."""
+    logger.debug(
+        "WS broadcast: type=%s clients=%d payload_keys=%s",
+        event.get("type"),
+        len(_active_websockets),
+        sorted(event.keys()),
+    )
     dead: list[WebSocket] = []
     for ws in list(_active_websockets):
         try:
             await ws.send_json(event)
-        except Exception:
+        except Exception as exc:
+            logger.debug("WS send failed (will discard): %s", exc)
             dead.append(ws)
     for ws in dead:
         _active_websockets.discard(ws)
@@ -377,6 +390,11 @@ async def upload_audio(
     else:
         folder, reason = _classify_drop(filename, contents, intent_hint)
 
+    logger.info(
+        "drop classified: filename=%r size=%dB intent_hint=%r → folder=%s reason=%s",
+        filename, len(contents), intent_hint, folder, reason,
+    )
+
     target_dir = _folder_dir(project, folder)
     target_dir.mkdir(parents=True, exist_ok=True)
     dest = target_dir / filename
@@ -427,6 +445,10 @@ async def relocate_drop(body: RelocateBody):
         )
     dst_dir.mkdir(parents=True, exist_ok=True)
     src.replace(dst)
+    logger.info(
+        "drop relocated: %s → %s (filename=%r)",
+        body.from_folder, body.to_folder, name,
+    )
 
     await _broadcast_event({
         "type": "file_relocated",

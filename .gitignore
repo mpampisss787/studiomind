@@ -10,4 +10,9 @@ build/
 *.wav
 *.mp3
 renders/
-debug/
+# Local-only debug junk (screenshots, scratch audio).
+debug/*
+# But DO commit log bundles produced by `studiomind debug-bundle`,
+# plus the .gitkeep so the folder exists for fresh clones.
+!debug/.gitkeep
+!debug/*.log

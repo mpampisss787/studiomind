@@ -1,0 +1,15 @@
+# debug/ — log bundles for sharing
+
+`studiomind debug-bundle` copies the most recent session log from
+`~/StudioMind/logs/` into this folder. The .gitignore is set up so
+that:
+
+- `debug/*.log` is committed (so `git push` shares the bundle)
+- everything else in `debug/` (screenshots, scratch audio) is ignored
+
+Old log bundles that were already pushed can be deleted at any time
+once they're no longer needed:
+
+  rm debug/session-*.log
+  git add -u debug/
+  git commit -m "Clean up old debug bundles"
