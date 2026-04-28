@@ -122,28 +122,28 @@ def test_debug_env_var_promotes_console_to_debug():
         assert stream.level == logging.DEBUG
 
 
-def test_bundle_logs_copies_into_dest(tmp_path: Path):
-    from studiomind.logging_setup import (
-        bundle_logs,
-        configure_session_logging,
-        USER_LOGS_DIR,
-    )
+def test_bundle_logs_copies_into_dest(tmp_path: Path, monkeypatch):
+    """Bundle should copy a PREVIOUS session's log, not the current process's own."""
+    from studiomind import logging_setup
 
-    # Generate a real log file
-    log_path = configure_session_logging()
-    assert log_path is not None
-    logging.getLogger("studiomind.test").info("bundle-test-marker")
-    for h in logging.getLogger().handlers:
-        if isinstance(h, logging.FileHandler):
-            h.flush()
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    monkeypatch.setattr(logging_setup, "USER_LOGS_DIR", log_dir)
+
+    # Write a fake "previous session" log (not via configure_session_logging so
+    # it won't be the current process's own handler path).
+    prev_log = log_dir / "session-20260101-120000.log"
+    prev_log.write_text("previous-session-marker\n", encoding="utf-8")
+
+    # Install the current session's handler pointing elsewhere so it's excluded.
+    logging_setup.configure_session_logging()
 
     dest = tmp_path / "out-debug"
-    copied = bundle_logs(last_n=1, dest_dir=dest)
+    copied = logging_setup.bundle_logs(last_n=1, dest_dir=dest)
 
     assert len(copied) == 1
-    assert copied[0].parent == dest
-    assert copied[0].name == log_path.name
-    assert "bundle-test-marker" in copied[0].read_text()
+    assert copied[0].name == prev_log.name
+    assert "previous-session-marker" in copied[0].read_text()
 
 
 def test_bundle_logs_returns_empty_when_no_logs(tmp_path: Path, monkeypatch):

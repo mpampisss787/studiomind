@@ -93,11 +93,25 @@ def find_repo_root() -> Path | None:
     return None
 
 
+def _current_log_path() -> Path | None:
+    """Return the file path this process is currently writing to, if any."""
+    for h in logging.getLogger().handlers:
+        if getattr(h, _FILE_HANDLER_INSTALLED, False) and hasattr(h, "baseFilename"):
+            return Path(h.baseFilename)
+    return None
+
+
 def latest_logs(n: int = 1) -> list[Path]:
-    """Return the most recent ``n`` session logs (newest last)."""
+    """Return the most recent ``n`` session logs (newest last), excluding the
+    current process's own log file so ``debug-bundle`` never bundles its own
+    startup-banner-only entry."""
     if not USER_LOGS_DIR.exists():
         return []
-    logs = sorted(USER_LOGS_DIR.glob("session-*.log"))
+    current = _current_log_path()
+    logs = [
+        p for p in sorted(USER_LOGS_DIR.glob("session-*.log"))
+        if current is None or p.resolve() != current.resolve()
+    ]
     return logs[-n:]
 
 

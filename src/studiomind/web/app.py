@@ -70,17 +70,23 @@ def _folder_dir(project, folder: DropFolder) -> Path:
     }[folder]
 
 
-def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> tuple[DropFolder, str]:
+def _classify_drop(
+    filename: str,
+    contents: bytes,
+    intent_hint: str | None,
+    project_name: str | None = None,
+) -> tuple[DropFolder, str]:
     """Return `(folder, classification_reason)` for a freshly-dropped file.
 
     Order of precedence:
       1. Explicit `intent_hint` from the UI / agent context
       2. Filename heuristics — only the high-confidence ones:
-          - master/mix/bounce/mixdown in stem  → masters
-          - ref_/`_ref` / reference in stem    → references
+          - `<project>_<anything>.wav` (FL native export) → stems
+          - master/mix/bounce/mixdown in stem              → masters
+          - ref_/`_ref` / reference in stem               → references
       3. Audio-info heuristics for native formats:
-          - short mono (< 5 s)                 → drops (likely a sample)
-      4. Default                                → drops/
+          - short mono (< 5 s)                            → drops (likely a sample)
+      4. Default                                           → drops/
 
     NOTE: there is intentionally no auto-route to ``references/`` based on
     duration / channel count. Anything dragged in from FL Studio (a stem,
@@ -99,6 +105,18 @@ def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> t
         return "stems", "agent_or_ui_hinted_stem"
 
     stem_lower = Path(filename).stem.lower()
+
+    # FL Studio exports stems as "<ProjectName>_<TrackName>.wav".
+    # If the active project name is known and the filename starts with
+    # "<project>_", this is almost certainly an FL-rendered stem.
+    if project_name:
+        project_slug = (
+            project_name.lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        )
+        if stem_lower.startswith(project_slug + "_"):
+            return "stems", "fl_project_prefix_match"
 
     if (
         "master" in stem_lower
@@ -388,7 +406,7 @@ async def upload_audio(
     if target_folder and target_folder in _VALID_DROP_FOLDERS:
         folder, reason = target_folder, "user_override"
     else:
-        folder, reason = _classify_drop(filename, contents, intent_hint)
+        folder, reason = _classify_drop(filename, contents, intent_hint, project_name=project.name)
 
     logger.info(
         "drop classified: filename=%r size=%dB intent_hint=%r → folder=%s reason=%s",

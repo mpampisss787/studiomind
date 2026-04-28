@@ -463,6 +463,26 @@ class WorkspaceSession:
         # server startup doesn't re-hammer locked/broken files. Cleared per-key
         # when the file's mtime changes (re-export refreshes the content).
         self._ingest_skip: dict[str, float] = self._load_ingest_skip()
+        # Short-TTL cache for status() so rapid sequential calls (e.g. the
+        # orient phase calling get_workspace_status, then the HTTP sidebar
+        # polling two seconds later) share one result without hitting disk.
+        self._status_cache: dict | None = None
+        self._status_cache_ts: float = 0.0
+
+    # How long a status() result is considered fresh (seconds).
+    # 10 s is enough to serve the sidebar's 2 s poll + the agent's orient
+    # call from the same snapshot, while staying short enough that a fresh
+    # render or relocation is reflected within one poll cycle.
+    _STATUS_CACHE_TTL = 10.0
+
+    def _invalidate_status_cache(self) -> None:
+        """Force the next status() call to rebuild from disk."""
+        self._status_cache = None
+
+    def _save_manifest(self) -> None:
+        """Save the manifest and invalidate the status cache."""
+        self._project.save_manifest(self._manifest)
+        self._invalidate_status_cache()
 
     @property
     def project(self) -> Project:
@@ -490,7 +510,20 @@ class WorkspaceSession:
         self._watcher_thread = None
 
     def status(self) -> dict:
-        """Return a JSON-safe snapshot of the current workspace state."""
+        """Return a JSON-safe snapshot of the current workspace state.
+
+        Results are cached for _STATUS_CACHE_TTL seconds. Any watcher tick
+        that modifies the manifest (new render, relocation, etc.) calls
+        _invalidate_status_cache() so the next call always reflects the
+        real state within one poll cycle.
+        """
+        now = time.monotonic()
+        if (
+            self._status_cache is not None
+            and (now - self._status_cache_ts) < self._STATUS_CACHE_TTL
+        ):
+            return self._status_cache
+
         with self._lock:
             stems = [rec.to_dict() for _tid, rec in sorted(self._manifest.stems.items())]
             masters = [rec.to_dict() for rec in self._manifest.masters]
@@ -500,7 +533,7 @@ class WorkspaceSession:
                 return []
             return sorted(p.name for p in d.iterdir() if p.is_file())
 
-        return {
+        result = {
             "project_name": self._project.name,
             "root": str(self._project.root),
             "fl_project_path": self._manifest.fl_project_path,
@@ -513,6 +546,9 @@ class WorkspaceSession:
             "references": _list_dir(self._project.references_dir),
             "drops": _list_dir(self._project.drops_dir),
         }
+        self._status_cache = result
+        self._status_cache_ts = now
+        return result
 
     def prepare_stem(self, track_id: int) -> dict:
         """Solo the track, write a pending stem entry, return the user instruction."""
@@ -559,7 +595,7 @@ class WorkspaceSession:
                 track_name=track_name,
                 fl_state_hash=state_hash,
             )
-            self._project.save_manifest(self._manifest)
+            self._save_manifest()
 
         instruction = (
             f"Track {track_id} ({track_name}) is soloed in FL. "
@@ -630,7 +666,7 @@ class WorkspaceSession:
                 tracks_prepared.append(
                     {"track_id": tid, "track_name": track_name, "suggested_filename": canonical_filename}
                 )
-            self._project.save_manifest(self._manifest)
+            self._save_manifest()
 
         master_info = self.prepare_master() if include_master else None
 
@@ -687,7 +723,7 @@ class WorkspaceSession:
                 m for m in self._manifest.masters if m.status != STATUS_PENDING
             ]
             self._manifest.masters.append(rec)
-            self._project.save_manifest(self._manifest)
+            self._save_manifest()
 
         return {
             "ok": True,
@@ -745,7 +781,7 @@ class WorkspaceSession:
 
         with self._lock:
             rec.analysis = analysis_dict
-            self._project.save_manifest(self._manifest)
+            self._save_manifest()
 
         # Un-solo the track if this was a stem
         if rec.kind == KIND_STEM and rec.track_id is not None:
@@ -854,7 +890,7 @@ class WorkspaceSession:
         with self._lock:
             newly_stale = self._project.mark_stale(self._manifest, current_hashes)
             if newly_stale:
-                self._project.save_manifest(self._manifest)
+                self._save_manifest()
         return newly_stale
 
     # ── internals ──────────────────────────────────────────────────────────
@@ -1131,7 +1167,7 @@ class WorkspaceSession:
         )
         with self._lock:
             self._manifest.masters.append(rec)
-            self._project.save_manifest(self._manifest)
+            self._save_manifest()
         logger.info("Batch master adopted from stems/ → masters/: %s", dest.name)
 
     def _poll_pending(self) -> None:
@@ -1237,7 +1273,7 @@ class WorkspaceSession:
 
         if changed:
             with self._lock:
-                self._project.save_manifest(self._manifest)
+                self._save_manifest()
 
     def _check_file_stable(self, path: Path) -> bool:
         """Return True once the file's size has been unchanged for STABLE_POLLS_NEEDED polls."""
