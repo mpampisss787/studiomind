@@ -110,17 +110,39 @@ Paste this verbatim, with the three IDs filled in:
 
 ---
 
+### How the workflow actually feels
+
+The mechanic at every "ask the user for something" pause is:
+
+1. Agent prints its question and **the chat input unlocks** (you see
+   the spinner stop and your textbox is editable again). That's the
+   visual signal that the agent ended its turn cleanly — exactly what
+   you want.
+2. Drop the reference file onto the chat page (or sidebar). A pill
+   appears (`📎 ref.wav → references/`). The Drops/References
+   sidebar count ticks up.
+3. Type "done" and hit send. The agent resumes with full prior
+   conversation memory and a single `get_workspace_status` call to
+   discover where the file landed.
+
+The drop itself goes through a separate HTTP endpoint
+(`/api/workspace/upload`), so you can drop the file even WHILE the
+agent is still talking — it'll be on disk and analysed by the time
+the agent gets to step 3.
+
 ### What "passing" looks like for step 5b
 
 - The agent's request is **specific**: it names what kind of file
   (e.g. "a finished commercial track in the same genre"), the
   preferred format (WAV / FLAC / MP3 OK), and where to drop it
   (the chat page anywhere, OR the sidebar's References zone).
-- The agent **stops and waits**. It doesn't keep tool-calling. It
-  doesn't make up a fake reference path.
-- After you drop the file, the agent recovers the new path from
-  `get_workspace_status` (or the file_dropped pill in chat) and
-  uses it directly in `compare_to_reference`.
+- The agent **ends its turn cleanly** — no `get_workspace_status`,
+  no `analyze_audio`, no "let me just check" tool calls hanging off
+  the ask. Visual signal: the chat input unlocks and the spinner
+  stops as soon as the agent prints its question.
+- After you drop the file and reply "done", the agent recovers the
+  new path from `get_workspace_status` (or the file_dropped pill in
+  chat) and uses it directly in `compare_to_reference`.
 - The agent doesn't ask you to "render" the dropped reference — the
   watcher analyzes drops automatically and the cache is warm.
 - The deltas are concrete (per-band dB diff + a one-line summary
@@ -128,12 +150,23 @@ Paste this verbatim, with the three IDs filled in:
 
 ### Failure modes to watch for in step 5b
 
-- Agent doesn't ask, makes up a path, tool errors out → prompt
-  regression, the new "ask for drops" guidance isn't being followed.
+- **Agent asks AND keeps tool-calling** → spinner stays on, chat
+  input stays locked, you can't reply. This means Claude generated a
+  trailing tool call after the ask (e.g. a redundant
+  `get_workspace_status`) — the prompt's "end your turn cleanly,
+  text only" rule got ignored. Capture the exact tool sequence from
+  the session log; this is a real prompt-regression.
+- Agent doesn't ask, makes up a path, tool errors out → the
+  "ask for drops" guidance isn't being followed at all.
 - Agent asks but is vague ("send me audio") → prompt could be
   stronger; capture the exact text it used.
 - Agent re-renders all stems after the drop lands → confused; only
   the new file needs analysis, the existing stems are unchanged.
+
+If you DO get stuck because the agent won't end its turn, hit the
+Stop button (top-right of the chat) — that fires `POST /api/stop`
+and breaks the agent loop on its next safe boundary. Then tell me
+what you saw.
 
 ---
 
