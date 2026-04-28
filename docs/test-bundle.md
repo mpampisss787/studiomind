@@ -350,6 +350,38 @@ that scripted tests miss.
 
 ---
 
+## 7b. Send the session log
+
+Every CLI session writes a debug-level log to
+``~/StudioMind/logs/session-<timestamp>.log`` automatically. When you're
+done testing for the day:
+
+```powershell
+python -m studiomind debug-bundle
+```
+
+That copies the most recent log into the repo's ``debug/`` folder. Then:
+
+```powershell
+git add debug/
+git commit -m "Debug logs"
+git push
+```
+
+The log captures every tool call, every MIDI exchange, every classifier
+decision, every workspace state update — much richer than what the chat
+shows. Pushing it lets the next session see exactly what happened.
+
+To bundle multiple recent logs (e.g. several invocations of `web` and
+`agent` across the test session): ``python -m studiomind debug-bundle
+--last 5``.
+
+If you ever want DEBUG output streamed to the console too (default is
+INFO+ on console, DEBUG+ in file), set ``$env:STUDIOMIND_DEBUG="1"`` for
+the shell session before running.
+
+---
+
 ## 8. Reporting back
 
 When you're done, paste back into chat:

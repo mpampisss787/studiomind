@@ -12,6 +12,13 @@ from typing import Any
 
 from studiomind.bridge.midi_client import MidiClient, list_ports
 from studiomind.bridge.commands import FLStudio
+from studiomind.logging_setup import (
+    USER_LOGS_DIR,
+    bundle_logs,
+    configure_session_logging,
+    find_repo_root,
+    latest_logs,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -314,7 +321,38 @@ def cmd_interactive(args: argparse.Namespace) -> None:
     print("Disconnected.")
 
 
+def cmd_debug_bundle(args: argparse.Namespace) -> None:
+    """Copy the last N session log file(s) into the repo's debug/ folder
+    so they can be ``git push``-ed for review."""
+    n = max(1, args.last)
+    logs = latest_logs(n)
+    if not logs:
+        print(f"No session logs found in {USER_LOGS_DIR}.")
+        print("Run a session first (e.g. `studiomind web`) to generate one.")
+        return
+
+    repo = find_repo_root()
+    if repo is None:
+        print("Couldn't locate the studiomind repo.")
+        print(f"Logs are in: {USER_LOGS_DIR}")
+        print("Copy them manually into wherever you want them reviewed.")
+        return
+
+    copied = bundle_logs(last_n=n)
+    print(f"Bundled {len(copied)} log file(s) into {repo / 'debug'}:")
+    for p in copied:
+        print(f"  → {p.relative_to(repo)}")
+    print()
+    print("Now run, from the repo root:")
+    print("  git add debug/")
+    print('  git commit -m "Debug logs"')
+    print("  git push")
+
+
 def main() -> None:
+    # File logging on, always. CLI gets its session log automatically.
+    configure_session_logging()
+
     parser = argparse.ArgumentParser(description="StudioMind — AI producer for FL Studio")
     sub = parser.add_subparsers(dest="command")
 
@@ -367,6 +405,18 @@ def main() -> None:
     # shell (low-level)
     sub.add_parser("shell", help="Low-level command shell (no AI)")
 
+    # debug-bundle — copy latest session log into <repo>/debug/
+    debug_parser = sub.add_parser(
+        "debug-bundle",
+        help="Copy the latest session log into <repo>/debug/ for sharing",
+    )
+    debug_parser.add_argument(
+        "--last",
+        type=int,
+        default=1,
+        help="Bundle the last N log files (default: 1, the most recent)",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -383,6 +433,7 @@ def main() -> None:
         "chat": cmd_chat,
         "web": cmd_web,
         "shell": cmd_interactive,
+        "debug-bundle": cmd_debug_bundle,
     }
 
     commands[args.command](args)
