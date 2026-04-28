@@ -4,9 +4,11 @@ that the analyzer can read. Native formats (WAV/FLAC/AIFF/OGG) pass
 through unchanged; everything else (MP3/M4A/WMA/AAC/OPUS/...) is
 transcoded via `ffmpeg`.
 
-Architecture decision (2026-04-27): ffmpeg is the universal codec
-backend. Centralising format-handling at the boundary keeps the analyzer
-WAV-only and avoids a thicket of pure-Python codec libs.
+ffmpeg is the universal codec backend (see vault ADR
+`Projects/StudioMind/decisions.md` — "Universal audio format support
+via decode-on-ingest"). Centralising format-handling at the boundary
+keeps the analyzer WAV-only and avoids a thicket of pure-Python codec
+libs.
 """
 
 from __future__ import annotations

@@ -28,6 +28,39 @@ BANDS: dict[str, tuple[float, float]] = {
     "air": (8000, 20000),
 }
 
+# Floor for log10 of zero or sub-noise energy. JSON can't encode -inf.
+DB_FLOOR = -120.0
+
+
+def band_energy_db(
+    mag: np.ndarray,
+    freqs: np.ndarray,
+    f_low: float,
+    f_high: float,
+    *,
+    floor_db: float = DB_FLOOR,
+):
+    """Sum squared magnitudes in `[f_low, f_high)` along the last axis, return dB.
+
+    Scalar in / scalar out for 1-D `mag` (a whole-file or mean spectrum).
+    `(N,)` out for 2-D `(N, n_bins)` `mag` (a per-frame STFT).
+
+    Bands that contain no FFT bins or have zero summed energy return `floor_db`.
+    """
+    mask = (freqs >= f_low) & (freqs < f_high)
+    if not bool(mask.any()):
+        if mag.ndim == 1:
+            return float(floor_db)
+        return np.full(mag.shape[0], floor_db, dtype=np.float32)
+    energy = np.sum(np.asarray(mag)[..., mask] ** 2, axis=-1)
+    if mag.ndim == 1:
+        e = float(energy)
+        return float(10.0 * math.log10(e + 1e-10)) if e > 0 else float(floor_db)
+    out = np.full(energy.shape, floor_db, dtype=np.float32)
+    nz = energy > 0
+    out[nz] = 10.0 * np.log10(energy[nz] + 1e-10)
+    return out
+
 
 @dataclass
 class AudioAnalysis:
@@ -53,7 +86,7 @@ class AudioAnalysis:
     side_ratio_db: float | None = None
     side_balance: dict[str, float] | None = None
 
-    # ── New STFT-derived summary fields (added 2026-04-27) ──
+    # ── STFT-derived summary fields ──
     # Peak-to-RMS in dB. High = punchy/dynamic, low = squashed.
     crest_factor_db: float | None = None
     # Loudness Range (LU): 95th - 10th percentile of short-term LUFS.
@@ -70,7 +103,7 @@ class AudioAnalysis:
     # Catches brief out-of-phase moments that whole-file correlation hides.
     correlation_min: float | None = None
 
-    # ── Tonal fields (YIN-based, added 2026-04-27) ──
+    # ── Tonal fields (YIN-based) ──
     # Median fundamental across voiced frames. None for noise/percussion
     # / silence (voicing_ratio drops below threshold).
     fundamental_hz: float | None = None
@@ -454,13 +487,10 @@ def analyze_array(
         if total_energy > 0 else 0.0
     )
 
-    spectral_balance: dict[str, float] = {}
-    for band_name, (f_low, f_high) in BANDS.items():
-        mask = (fft_freqs >= f_low) & (fft_freqs < f_high)
-        band_energy = float(np.sum(fft_magnitude[mask] ** 2))
-        spectral_balance[band_name] = (
-            10.0 * math.log10(band_energy + 1e-10) if band_energy > 0 else -120.0
-        )
+    spectral_balance: dict[str, float] = {
+        band_name: float(band_energy_db(fft_magnitude, fft_freqs, f_low, f_high))
+        for band_name, (f_low, f_high) in BANDS.items()
+    }
 
     status = "silent" if (not math.isfinite(rms_db) or rms_db < -60.0) else "ok"
 
@@ -488,13 +518,10 @@ def analyze_array(
             side_ratio_db = float("inf")
 
         side_fft = np.abs(np.fft.rfft(side))
-        side_balance = {}
-        for band_name, (f_low, f_high) in BANDS.items():
-            mask = (fft_freqs >= f_low) & (fft_freqs < f_high)
-            band_energy = float(np.sum(side_fft[mask] ** 2))
-            side_balance[band_name] = (
-                10.0 * math.log10(band_energy + 1e-10) if band_energy > 0 else -120.0
-            )
+        side_balance = {
+            band_name: float(band_energy_db(side_fft, fft_freqs, f_low, f_high))
+            for band_name, (f_low, f_high) in BANDS.items()
+        }
 
         correlation_min_val = _correlation_min(audio, stft_params["n_fft"], stft_params["hop"])
 

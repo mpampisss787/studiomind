@@ -13,7 +13,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -50,10 +50,11 @@ app = FastAPI(title="StudioMind")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-_VALID_DROP_FOLDERS = ("stems", "masters", "references", "drops")
+DropFolder = Literal["stems", "masters", "references", "drops"]
+_VALID_DROP_FOLDERS: tuple[DropFolder, ...] = get_args(DropFolder)
 
 
-def _folder_dir(project, folder: str) -> Path:
+def _folder_dir(project, folder: DropFolder) -> Path:
     """Resolve a folder name (`stems`, `masters`, etc.) to its Path on the project."""
     return {
         "stems": project.stems_dir,
@@ -63,7 +64,7 @@ def _folder_dir(project, folder: str) -> Path:
     }[folder]
 
 
-def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> tuple[str, str]:
+def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> tuple[DropFolder, str]:
     """Return `(folder, classification_reason)` for a freshly-dropped file.
 
     Order of precedence:
@@ -395,8 +396,8 @@ async def upload_reference(file: UploadFile = File(...)):
 
 class RelocateBody(BaseModel):
     filename: str
-    from_folder: str
-    to_folder: str
+    from_folder: DropFolder
+    to_folder: DropFolder
 
 
 @app.post("/api/workspace/relocate")
@@ -405,9 +406,6 @@ async def relocate_drop(body: RelocateBody):
     project, err = _resolve_active_project()
     if project is None:
         raise HTTPException(status_code=404, detail=err or "No active project.")
-
-    if body.from_folder not in _VALID_DROP_FOLDERS or body.to_folder not in _VALID_DROP_FOLDERS:
-        raise HTTPException(status_code=400, detail="Invalid folder name.")
 
     name = Path(body.filename).name  # path-traversal guard
     src = _folder_dir(project, body.from_folder) / name

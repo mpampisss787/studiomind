@@ -12,13 +12,13 @@ isn't cached yet.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 import numpy as np
 
 from studiomind.analyzer.cache import read_analysis
 from studiomind.analyzer.pipeline import analyze_and_cache
+from studiomind.analyzer.spectral import band_energy_db
 
 
 # ISO standard 1/3-octave centers from 20 Hz to 20 kHz.
@@ -45,15 +45,10 @@ def _third_octave_envelope(
     Empty/sub-range bands return -120 dB.
     """
     mean_mag = stft_mag.mean(axis=0)
-    out = np.full(len(THIRD_OCTAVE_CENTERS_HZ), -120.0, dtype=np.float64)
+    out = np.empty(len(THIRD_OCTAVE_CENTERS_HZ), dtype=np.float64)
     for i, center in enumerate(THIRD_OCTAVE_CENTERS_HZ):
         lo, hi = _band_edges(center)
-        mask = (freqs >= lo) & (freqs < hi)
-        if not np.any(mask):
-            continue
-        band_energy = float(np.sum(mean_mag[mask] ** 2))
-        if band_energy > 0:
-            out[i] = 10.0 * math.log10(band_energy + 1e-10)
+        out[i] = band_energy_db(mean_mag, freqs, lo, hi)
     return out
 
 

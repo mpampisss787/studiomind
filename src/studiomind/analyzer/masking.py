@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from studiomind.analyzer.spectral import BANDS
+from studiomind.analyzer.spectral import BANDS, band_energy_db
 
 # A frame is "loud in this band" if its band energy is above this dB level
 # (relative to the band's full FFT magnitude floor — see _band_energy_db).
@@ -44,21 +44,9 @@ class StemFrames:
 
 
 def _band_loudness_db(stem: StemFrames, band: tuple[float, float]) -> np.ndarray:
-    """Per-frame band energy in dB. Empty bands return -120 dB.
-
-    `band` is `(f_low, f_high)` in Hz. Sums squared magnitudes across the
-    in-band bins per frame, then 10*log10.
-    """
+    """Per-frame band energy in dB. Empty bands return -120 dB."""
     f_low, f_high = band
-    mask = (stem.freqs >= f_low) & (stem.freqs < f_high)
-    if not np.any(mask):
-        return np.full(stem.stft_mag.shape[0], -120.0, dtype=np.float32)
-    band_mag = stem.stft_mag[:, mask]
-    energy = np.sum(band_mag.astype(np.float32) ** 2, axis=1)
-    out = np.full(energy.shape, -120.0, dtype=np.float32)
-    nz = energy > 0
-    out[nz] = 10.0 * np.log10(energy[nz] + 1e-10)
-    return out
+    return band_energy_db(stem.stft_mag.astype(np.float32, copy=False), stem.freqs, f_low, f_high)
 
 
 def detect_time_aware_masking(

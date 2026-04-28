@@ -454,6 +454,10 @@ class WorkspaceSession:
         # Files we've tried to ingest (cache-warm scan), to avoid hammering
         # broken/locked files every tick. Cleared if the file's mtime moves.
         self._ingest_attempts: dict[str, tuple[float, int]] = {}
+        # path -> mtime at which we last verified the file was cached. Lets the
+        # watcher skip a full `np.load` of the .npz on every tick once a file's
+        # cache state is known. Invalidated automatically by mtime drift.
+        self._ingest_verified_mtime: dict[str, float] = {}
 
     @property
     def project(self) -> Project:
@@ -504,14 +508,6 @@ class WorkspaceSession:
             "references": _list_dir(self._project.references_dir),
             "drops": _list_dir(self._project.drops_dir),
         }
-
-    # ── Auto-render removed 2026-04-27 ────────────────────────────
-    # The pywinauto + SetForegroundWindow + EnumChildWindows + SendInput
-    # automation stack was scrapped. Audio now arrives via three
-    # converging channels feeding the watcher: manual FL render, web
-    # drop-zone, and FL native drag-to-Explorer. See
-    # vault: Projects/StudioMind/decisions.md (2026-04-27 entries).
-
 
     def prepare_stem(self, track_id: int) -> dict:
         """Solo the track, write a pending stem entry, return the user instruction."""
@@ -986,14 +982,23 @@ class WorkspaceSession:
                     continue  # our own output, cached via the original
                 if not is_supported(f):
                     continue
-                if is_cached(f, analyses_dir):
-                    continue
 
                 key = str(f)
                 try:
                     mtime = f.stat().st_mtime
                 except OSError:
                     continue
+
+                # Fast path: we already verified this (path, mtime) is cached.
+                # `is_cached` opens and parses the .npz; calling it every 0.5 s
+                # for an unchanged file is pure I/O waste.
+                if self._ingest_verified_mtime.get(key) == mtime:
+                    continue
+
+                if is_cached(f, analyses_dir):
+                    self._ingest_verified_mtime[key] = mtime
+                    continue
+
                 last_mtime, attempts = self._ingest_attempts.get(key, (0.0, 0))
                 if mtime != last_mtime:
                     attempts = 0  # file changed → fresh attempt budget
@@ -1003,6 +1008,7 @@ class WorkspaceSession:
                 try:
                     analyze_and_cache(f, analyses_dir)
                     self._ingest_attempts.pop(key, None)
+                    self._ingest_verified_mtime[key] = mtime
                     logger.debug("Auto-analyzed %s", f.name)
                 except Exception as e:
                     self._ingest_attempts[key] = (mtime, attempts + 1)

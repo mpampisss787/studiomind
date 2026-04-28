@@ -190,7 +190,8 @@ def test_relocate_rejects_invalid_folder(web_client: TestClient) -> None:
         "/api/workspace/relocate",
         json={"filename": "x.wav", "from_folder": "drops", "to_folder": "garbage"},
     )
-    assert rr.status_code == 400
+    # Pydantic Literal validation returns 422; pre-Literal it was 400.
+    assert rr.status_code in (400, 422)
 
 
 def test_relocate_404_for_missing_file(web_client: TestClient) -> None:

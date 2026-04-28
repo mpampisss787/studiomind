@@ -10,8 +10,8 @@ Stays in pure numpy so we don't pay numba's install + JIT-warmup cost on
 Win11 ARM64 + Prism (the target platform). Probabilistic-YIN's voicing
 nuance is approximated by a hard CMND threshold + median aggregation.
 
-See ADR `Projects/StudioMind/decisions.md` (2026-04-27 — Hand-rolled YIN
-over librosa.pyin).
+See ADR `Projects/StudioMind/decisions.md` — "Hand-rolled YIN over
+librosa.pyin".
 """
 
 from __future__ import annotations
