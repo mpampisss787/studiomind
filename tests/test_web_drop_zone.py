@@ -70,15 +70,21 @@ def test_filename_with_reference_routes_to_references(web_client: TestClient) ->
     assert r.json()["folder"] == "references"
 
 
-def test_long_stereo_file_classified_as_reference(web_client: TestClient) -> None:
-    """Untitled 90-second stereo file → likely full mix → references."""
+def test_long_stereo_file_no_longer_auto_routes_to_references(
+    web_client: TestClient,
+) -> None:
+    """Long stereo files used to auto-route to references/, but anything
+    dragged from FL (a stem, a bus, an in-progress mix) is typically
+    stereo and longer than a minute. References are opt-in now — they
+    require a filename keyword, an intent_hint, or the sidebar zone."""
     wav = _make_wav_bytes(duration_s=90.0, channels=2)
     r = web_client.post(
         "/api/workspace/upload",
         files={"file": ("untitled.wav", wav, "audio/wav")},
     )
     assert r.status_code == 200
-    assert r.json()["folder"] == "references"
+    assert r.json()["folder"] == "drops"
+    assert r.json()["classification_reason"] == "no_clear_signal"
 
 
 def test_short_mono_file_classified_as_drop(web_client: TestClient) -> None:

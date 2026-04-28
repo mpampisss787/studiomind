@@ -206,8 +206,11 @@
       opacity: 0;
       transition: opacity 0.15s;
     }
-    .ref-row:hover .ref-delete { opacity: 1; }
-    .ref-delete:hover { color: var(--error); }
+    .ref-row:hover .ref-delete,
+    .stem-row:hover .ref-delete,
+    .master-row:hover .ref-delete { opacity: 1; }
+    .ref-delete:hover { color: var(--text); }
+    .ref-delete[title="Remove"]:hover { color: var(--error); }
 
     .ref-drop-zone {
       margin-top: 6px;
@@ -2006,10 +2009,13 @@
         <span class="stem-track-id">${rec.track_id ?? ''}</span>
         <span class="stem-name">${rec.track_name || rec.filename}</span>
         <span class="stem-lufs">${fmtLufs(rec.analysis)}</span>
+        <button class="ref-delete row-move-btn" title="Move">⤴</button>
       `;
       if (hasAnalysis) {
         row.addEventListener('click', () => openStemDetail(rec));
       }
+      const moveBtn = row.querySelector('.row-move-btn');
+      attachMoveMenu(moveBtn, rec.filename, 'stems');
       return row;
     }
 
@@ -2022,16 +2028,55 @@
         <span class="status-pip ${rec.status}"></span>
         <span class="master-name">${rec.filename}</span>
         <span class="master-lufs">${fmtLufs(rec.analysis)}</span>
+        <button class="ref-delete row-move-btn" title="Move">⤴</button>
       `;
       if (hasAnalysis) {
         row.addEventListener('click', () => openStemDetail(rec));
       }
+      const moveBtn = row.querySelector('.row-move-btn');
+      attachMoveMenu(moveBtn, rec.filename, 'masters');
       return row;
+    }
+
+    // Shared Move-menu builder. Attaches a click handler to `button` that
+    // opens a viewport-clamped menu listing every drop folder except the
+    // current one; clicking a folder calls /api/workspace/relocate and
+    // refreshes the sidebar.
+    function attachMoveMenu(button, filename, fromFolder) {
+      button.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        document.querySelectorAll('.drop-pill-menu').forEach(m => m.remove());
+        const menu = document.createElement('div');
+        menu.className = 'drop-pill-menu';
+        menu.style.position = 'fixed';
+        menu.style.zIndex = '10000';
+        const ALL = ['stems', 'masters', 'references', 'drops'];
+        ALL.filter(f => f !== fromFolder).forEach(f => {
+          const opt = document.createElement('button');
+          opt.textContent = `Move to ${f}/`;
+          opt.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            menu.remove();
+            await relocateDrop(filename, fromFolder, f);
+            refreshSidebar();
+          });
+          menu.appendChild(opt);
+        });
+        document.body.appendChild(menu);
+        positionMenuFromButton(menu, button);
+        const closeOnOutside = (e) => {
+          if (!menu.contains(e.target)) {
+            menu.remove();
+            document.removeEventListener('click', closeOnOutside);
+          }
+        };
+        setTimeout(() => document.addEventListener('click', closeOnOutside), 0);
+      });
     }
 
     function renderDrop(name) {
       // Sidebar row for a file in drops/. Mirrors renderReference shape but
-      // adds a "Move ▾" button that re-uses the same /api/workspace/relocate
+      // adds a "Move ⤴" button that re-uses the same /api/workspace/relocate
       // endpoint as the chat pill.
       const row = document.createElement('div');
       row.className = 'ref-row';
@@ -2044,37 +2089,7 @@
       const buttons = row.querySelectorAll('.ref-delete');
       const moveBtn = buttons[0];
       const deleteBtn = buttons[1];
-      moveBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        document.querySelectorAll('.drop-pill-menu').forEach(m => m.remove());
-        const menu = document.createElement('div');
-        menu.className = 'drop-pill-menu';
-        // position: fixed so the menu floats above any sidebar overflow
-        // and we don't have to compensate for scroll. Initial left/top
-        // get set after we measure the menu.
-        menu.style.position = 'fixed';
-        menu.style.zIndex = '10000';
-        ['stems', 'masters', 'references'].forEach(f => {
-          const btn = document.createElement('button');
-          btn.textContent = `Move to ${f}/`;
-          btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            menu.remove();
-            await relocateDrop(name, 'drops', f);
-            refreshSidebar();
-          });
-          menu.appendChild(btn);
-        });
-        document.body.appendChild(menu);
-        positionMenuFromButton(menu, moveBtn);
-        const closeOnOutside = (e) => {
-          if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('click', closeOnOutside);
-          }
-        };
-        setTimeout(() => document.addEventListener('click', closeOnOutside), 0);
-      });
+      attachMoveMenu(moveBtn, name, 'drops');
       deleteBtn.addEventListener('click', async () => {
         if (!confirm(`Remove drop "${name}"?`)) return;
         await fetch(`/api/workspace/drop/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -2089,9 +2104,14 @@
       row.innerHTML = `
         <span class="status-pip ready"></span>
         <span class="ref-name" title="${name}">${name}</span>
+        <button class="ref-delete" title="Move" style="margin-right:4px;">⤴</button>
         <button class="ref-delete" title="Remove">&times;</button>
       `;
-      row.querySelector('.ref-delete').addEventListener('click', async () => {
+      const buttons = row.querySelectorAll('.ref-delete');
+      const moveBtn = buttons[0];
+      const deleteBtn = buttons[1];
+      attachMoveMenu(moveBtn, name, 'references');
+      deleteBtn.addEventListener('click', async () => {
         if (!confirm(`Remove reference "${name}"?`)) return;
         await fetch(`/api/workspace/reference/${encodeURIComponent(name)}`, { method: 'DELETE' });
         refreshSidebar();

@@ -69,10 +69,21 @@ def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> t
 
     Order of precedence:
       1. Explicit `intent_hint` from the UI / agent context
-      2. Filename heuristics (master/mix/bounce → masters, ref → references)
-      3. Audio-info heuristics for native formats (long stereo → references,
-         short mono → drops as a sample)
-      4. Default → `drops/`
+      2. Filename heuristics — only the high-confidence ones:
+          - master/mix/bounce/mixdown in stem  → masters
+          - ref_/`_ref` / reference in stem    → references
+      3. Audio-info heuristics for native formats:
+          - short mono (< 5 s)                 → drops (likely a sample)
+      4. Default                                → drops/
+
+    NOTE: there is intentionally no auto-route to ``references/`` based on
+    duration / channel count. Anything dragged in from FL Studio (a stem,
+    a clip, an in-progress mix) is typically stereo and longer than a
+    minute — routing such files to ``references/`` was the wrong default.
+    References are *opt-in*: drop on the sidebar's references zone, name
+    the file with ``ref_*`` / ``reference*``, or pass ``intent_hint``.
+    Everything else lands in ``drops/`` where the user can move it to its
+    real home in one click via the Drops sidebar's Move menu.
     """
     if intent_hint == "reference":
         return "references", "agent_or_ui_hinted_reference"
@@ -81,7 +92,6 @@ def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> t
     if intent_hint == "stem":
         return "stems", "agent_or_ui_hinted_stem"
 
-    name_lower = filename.lower()
     stem_lower = Path(filename).stem.lower()
 
     if (
@@ -105,8 +115,6 @@ def _classify_drop(filename: str, contents: bytes, intent_hint: str | None) -> t
             info = _sf.info(io.BytesIO(contents))
             duration = float(info.duration)
             channels = int(info.channels)
-            if channels >= 2 and duration > 60:
-                return "references", "long_stereo_likely_full_song"
             if channels == 1 and duration < 5:
                 return "drops", "short_mono_likely_sample"
         except Exception:
