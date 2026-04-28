@@ -1,0 +1,93 @@
+19:12:32 [INFO] studiomind: File logging enabled → C:\Users\mpamp\StudioMind\logs\session-20260428-191232.log
+19:12:32 [DEBUG] asyncio: Using proactor: IocpProactor
+19:12:33 [INFO] studiomind.bridge.midi_client: Opened MIDI output: Default App Loopback (A) 1
+19:12:33 [INFO] studiomind.bridge.midi_client: Opened MIDI input: Default App Loopback (A) 0
+19:12:33 [DEBUG] studiomind.bridge.midi_client: Sent request seq=0 method=get_project_name (1 chunks)
+19:12:33 [WARNING] studiomind.bridge.midi_client: Received response for unknown seq=0
+19:12:37 [INFO] studiomind.web.app: Client disconnected
+19:12:37 [DEBUG] studiomind.web.app: Auto-save on disconnect failed: 'AgentLoop' object has no attribute '_last_text_response'
+19:12:43 [DEBUG] studiomind.workspace: Auto-analyzed koto_Cymatics - Astro FX 4 - Reverse Air.wav
+19:12:47 [INFO] studiomind.bridge.midi_client: Opened MIDI output: Default App Loopback (A) 1
+19:12:47 [INFO] studiomind.bridge.midi_client: Opened MIDI input: Default App Loopback (A) 0
+19:12:47 [DEBUG] studiomind.bridge.midi_client: Sent request seq=0 method=get_project_name (1 chunks)
+19:12:47 [WARNING] studiomind.bridge.midi_client: Received response for unknown seq=0
+19:12:52 [DEBUG] studiomind.workspace: Auto-analyzed koto_Goalbz Tag.wav
+19:12:53 [INFO] studiomind.web.app: Client disconnected
+19:12:53 [DEBUG] studiomind.web.app: Auto-save on disconnect failed: 'AgentLoop' object has no attribute '_last_text_response'
+19:12:55 [INFO] studiomind.bridge.midi_client: Opened MIDI output: Default App Loopback (A) 1
+19:12:55 [INFO] studiomind.bridge.midi_client: Opened MIDI input: Default App Loopback (A) 0
+19:12:55 [DEBUG] studiomind.bridge.midi_client: Sent request seq=0 method=get_project_name (1 chunks)
+19:12:56 [DEBUG] studiomind.workspace: Auto-analyzed koto_Goalbz Tag.wav
+19:13:01 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Bongo Perc.wav
+19:13:02 [INFO] studiomind.web.app: Client disconnected
+19:13:02 [DEBUG] studiomind.web.app: Auto-save on disconnect failed: 'AgentLoop' object has no attribute '_last_text_response'
+19:13:04 [INFO] studiomind.bridge.midi_client: Opened MIDI output: Default App Loopback (A) 1
+19:13:04 [INFO] studiomind.bridge.midi_client: Opened MIDI input: Default App Loopback (A) 0
+19:13:04 [DEBUG] studiomind.bridge.midi_client: Sent request seq=0 method=get_project_name (1 chunks)
+19:13:04 [WARNING] studiomind.bridge.midi_client: Received response for unknown seq=0
+19:13:05 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Bongo Perc.wav
+19:13:07 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Bongo Perc.wav
+19:13:11 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Crack Hat.wav
+19:13:17 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Crack Hat.wav
+19:13:18 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Crack Hat.wav
+19:13:21 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Crack Hat.wav
+19:13:23 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Greek Clap.wav
+19:13:29 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Greek Clap.wav
+19:13:32 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Greek Clap.wav
+19:13:38 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Greek Clap.wav
+19:13:42 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Low Hat.wav
+19:13:49 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Low Hat.wav
+19:13:55 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Low Hat.wav
+19:14:01 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Low Hat.wav
+19:14:05 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Metal Clap.wav
+19:14:11 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Metal Clap.wav
+19:14:19 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Metal Clap.wav
+19:14:26 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Metal Clap.wav
+19:14:36 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Simmie Hat.wav
+19:14:47 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Simmie Hat.wav
+19:14:59 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Simmie Hat.wav
+19:15:08 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5 #2.wav
+19:15:10 [DEBUG] studiomind.workspace: Auto-analyzed koto_JP - Simmie Hat.wav
+19:15:14 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5 #2.wav
+19:15:18 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5 #2.wav
+19:15:23 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5.wav
+19:15:24 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5.wav
+19:15:26 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5.wav
+19:15:31 [DEBUG] studiomind.workspace: Auto-analyzed koto_Kontakt 5.wav
+19:16:08 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing #2.wav
+19:16:14 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing #2.wav
+19:16:26 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing #2.wav
+19:16:39 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing #2.wav
+19:18:02 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing.wav
+19:18:04 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing.wav
+19:18:30 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing.wav
+19:18:54 [DEBUG] studiomind.workspace: Auto-analyzed koto_Nuclear Kick.wav
+19:18:57 [DEBUG] studiomind.workspace: Auto-analyzed koto_Nuclear Kick.wav
+19:19:01 [DEBUG] studiomind.workspace: Auto-analyzed koto_koto thing.wav
+19:19:10 [DEBUG] studiomind.workspace: Auto-analyzed koto_Nuclear Kick.wav
+19:19:15 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit] #2.wav
+19:19:16 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit] #2.wav
+19:19:20 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit] #2.wav
+19:19:28 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit] #2.wav
+19:19:32 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit].wav
+19:19:33 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit].wav
+19:19:35 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit].wav
+19:19:41 [DEBUG] studiomind.workspace: Auto-analyzed koto_Omnisphere [64bit].wav
+19:20:26 [DEBUG] studiomind.workspace: Auto-analyzed koto_[808] choucroute.wav
+19:20:31 [DEBUG] studiomind.workspace: Auto-analyzed koto_[808] choucroute.wav
+19:20:40 [DEBUG] studiomind.workspace: Auto-analyzed koto_[808] choucroute.wav
+19:20:58 [DEBUG] studiomind.workspace: Auto-analyzed koto_[808] choucroute.wav
+19:21:07 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_[reese] bob cochonou.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\stems\\koto_[reese] bob cochonou.wav'
+19:21:07 [DEBUG] studiomind.workspace: Auto-analyzed koto_[reese] bob cochonou.wav
+19:21:11 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_[reese] bob cochonou.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\stems\\koto_[reese] bob cochonou.wav'
+19:21:11 [DEBUG] studiomind.workspace: Auto-analyzed koto_[reese] bob cochonou.wav
+19:21:19 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_[reese] bob cochonou.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\stems\\koto_[reese] bob cochonou.wav'
+19:21:19 [DEBUG] studiomind.workspace: Auto-analyzed koto_[reese] bob cochonou.wav
+19:21:28 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_[reese] bob cochonou.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\stems\\koto_[reese] bob cochonou.wav'
+19:21:28 [DEBUG] studiomind.workspace: Auto-analyzed koto_[reese] bob cochonou.wav
+19:22:17 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_Master.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\masters\\koto_Master.wav'
+19:22:17 [DEBUG] studiomind.workspace: Auto-analyzed koto_Master.wav
+19:22:27 [WARNING] studiomind.analyzer.pipeline: Failed to cache analysis for koto_Master.wav: [WinError 2] The system cannot find the file specified: 'C:\\Users\\mpamp\\StudioMind\\projects\\koto\\masters\\koto_Master.wav'
+19:22:27 [DEBUG] studiomind.workspace: Auto-analyzed koto_Master.wav
+19:22:55 [INFO] studiomind.web.app: Client disconnected
+19:22:55 [DEBUG] studiomind.web.app: Auto-save on disconnect failed: 'AgentLoop' object has no attribute '_last_text_response'
