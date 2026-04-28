@@ -48,11 +48,15 @@ git pull
 pip install -e .
 ```
 
-Then **copy the updated device script** into FL's hardware folder:
+Then **copy the updated device script** into FL's hardware folder. In
+PowerShell:
 
 ```powershell
-copy scripts\device_StudioMind.py "$env:USERPROFILE\Documents\Image-Line\FL Studio\Settings\Hardware\StudioMind\device_StudioMind.py" /Y
+New-Item -ItemType Directory -Force "$env:USERPROFILE\Documents\Image-Line\FL Studio\Settings\Hardware\StudioMind" | Out-Null
+Copy-Item scripts\device_StudioMind.py "$env:USERPROFILE\Documents\Image-Line\FL Studio\Settings\Hardware\StudioMind\device_StudioMind.py" -Force
 ```
+
+(In a `cmd.exe` shell instead, use `copy ... /Y`.)
 
 This update adds a new SysEx command (`set_send`) — without copying the
 fresh device script, `apply_sidechain` will return "Unknown method:
