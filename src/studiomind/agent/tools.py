@@ -1030,15 +1030,53 @@ class ToolExecutor:
             knee=params.get("knee"),
         )
 
-        results = []
+        # Map of param_id → human-readable label, just for the readback report
+        from studiomind.plugins import fruity_compressor as fc
+        param_labels = {
+            fc.PARAM_THRESHOLD: "threshold",
+            fc.PARAM_RATIO: "ratio",
+            fc.PARAM_GAIN: "gain",
+            fc.PARAM_ATTACK: "attack",
+            fc.PARAM_RELEASE: "release",
+            fc.PARAM_TYPE: "knee",
+        }
+
+        # Tolerance for the FL-readback equality check. Plugins quantize
+        # parameter values internally, so the round-trip can drift by a
+        # tiny amount even on a successful write. Anything beyond this
+        # is a real rejection, not quantization noise.
+        WRITE_TOLERANCE = 1e-3
+
+        per_param: list[dict[str, Any]] = []
         for cmd in commands:
+            requested = cmd["value"]
             result = self._fl.set_plugin_param(
                 track_id=cmd["track_id"],
                 slot=cmd["slot"],
                 param_id=cmd["param_id"],
-                value=cmd["value"],
+                value=requested,
             )
-            results.append(result)
+            # Device script returns {"ok": ..., "param_id": ..., "new_value": ..., "display": ...}
+            # — new_value is plugins.getParamValue() called immediately after the write.
+            # If new_value == requested (within tolerance), the write took. If not, FL
+            # silently rejected it (or the wrapper's curve clamped to a no-op).
+            new_value = result.get("new_value")
+            label = param_labels.get(cmd["param_id"], f"param_{cmd['param_id']}")
+            took = (
+                isinstance(new_value, (int, float))
+                and abs(float(new_value) - float(requested)) <= WRITE_TOLERANCE
+            )
+            per_param.append({
+                "param": label,
+                "param_id": cmd["param_id"],
+                "requested_value": requested,
+                "new_value": new_value,
+                "display": result.get("display"),
+                "took": took,
+            })
+
+        succeeded = [p for p in per_param if p["took"]]
+        failed = [p for p in per_param if not p["took"]]
 
         # Build a compact human description for the decision log
         bits = []
@@ -1055,6 +1093,8 @@ class ToolExecutor:
         if params.get("knee") is not None:
             bits.append(f"knee {params['knee']}")
         bits_str = ", ".join(bits) if bits else "no changes"
+        if failed:
+            bits_str += f" — {len(failed)} param(s) NOT accepted by FL"
 
         self._log_decision(
             tool="set_compressor",
@@ -1064,9 +1104,16 @@ class ToolExecutor:
                 f"{params['slot']}: {bits_str}"
             ),
         )
+
         return {
-            "ok": True,
-            "params_set": len(commands),
+            # ok = True only when every requested param actually moved in FL.
+            # The agent prompt should treat ok=False as a hard signal that the
+            # write didn't take and stop the user before claiming success.
+            "ok": len(failed) == 0,
+            "params_attempted": len(commands),
+            "params_accepted": len(succeeded),
+            "params_rejected": len(failed),
+            "per_param": per_param,
             "threshold_db": params.get("threshold_db"),
             "ratio": params.get("ratio"),
             "gain_db": params.get("gain_db"),
