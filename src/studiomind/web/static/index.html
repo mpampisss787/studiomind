@@ -2046,14 +2046,13 @@
       const deleteBtn = buttons[1];
       moveBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        // Build a tiny menu the same way openPillMenu does
         document.querySelectorAll('.drop-pill-menu').forEach(m => m.remove());
         const menu = document.createElement('div');
         menu.className = 'drop-pill-menu';
-        menu.style.position = 'absolute';
-        const rect = moveBtn.getBoundingClientRect();
-        menu.style.top = `${rect.bottom + 4}px`;
-        menu.style.left = `${rect.left}px`;
+        // position: fixed so the menu floats above any sidebar overflow
+        // and we don't have to compensate for scroll. Initial left/top
+        // get set after we measure the menu.
+        menu.style.position = 'fixed';
         menu.style.zIndex = '10000';
         ['stems', 'masters', 'references'].forEach(f => {
           const btn = document.createElement('button');
@@ -2067,6 +2066,7 @@
           menu.appendChild(btn);
         });
         document.body.appendChild(menu);
+        positionMenuFromButton(menu, moveBtn);
         const closeOnOutside = (e) => {
           if (!menu.contains(e.target)) {
             menu.remove();
@@ -2436,6 +2436,10 @@
       const filename = pill.dataset.filename;
       const menu = document.createElement('div');
       menu.className = 'drop-pill-menu';
+      // position: fixed + viewport-clamped placement so the menu can't
+      // shoot off-screen on narrow chat panes or near the right edge.
+      menu.style.position = 'fixed';
+      menu.style.zIndex = '10000';
       ALL_FOLDERS.filter(f => f !== current).forEach(f => {
         const btn = document.createElement('button');
         btn.textContent = `Move to ${f}/`;
@@ -2446,7 +2450,8 @@
         });
         menu.appendChild(btn);
       });
-      pill.appendChild(menu);
+      document.body.appendChild(menu);
+      positionMenuFromButton(menu, pill);
 
       const closeOnOutside = (e) => {
         if (!menu.contains(e.target)) {
@@ -2472,6 +2477,34 @@
       } catch (err) {
         addMessage('error', `Relocate error: ${err.message}`);
       }
+    }
+
+    // Position a (position:fixed) menu just below `button`, clamped so it
+    // never overflows the viewport. Falls back to opening upward when there
+    // isn't room below; falls back to right-aligning when the menu would
+    // clip past the right edge (the case the narrow sidebar hits).
+    function positionMenuFromButton(menu, button) {
+      const margin = 8;
+      const btnRect = button.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+
+      // Horizontal: prefer button-left; clamp inside viewport.
+      let left = btnRect.left;
+      if (left + menuRect.width + margin > vw) {
+        left = Math.max(margin, btnRect.right - menuRect.width);
+      }
+      if (left < margin) left = margin;
+
+      // Vertical: prefer below; flip above if it doesn't fit.
+      let top = btnRect.bottom + 4;
+      if (top + menuRect.height + margin > vh) {
+        top = Math.max(margin, btnRect.top - menuRect.height - 4);
+      }
+
+      menu.style.left = `${Math.round(left)}px`;
+      menu.style.top = `${Math.round(top)}px`;
     }
 
     function updatePillFolder(filename, newFolder) {
