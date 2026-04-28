@@ -74,6 +74,17 @@ Paste this verbatim, with the three IDs filled in:
 >    change. Apply, then ask me to Ctrl+R the bass and master, then
 >    report.
 >
+> 5b. **Reference compare (drop-zone exercise).** I want the master to
+>    feel more like a commercial pop master. ASK ME to drop a
+>    reference track — be specific about what you want (a finished
+>    song with the target sound) and where to drop it. Then STOP and
+>    wait for me to confirm. Once I say it's in, locate it via
+>    `get_workspace_status`, run `compare_to_reference(track_path=<my
+>    current master path>, reference_path=<the reference>)`, and tell
+>    me the three biggest deltas with concrete suggestions on what to
+>    fix on the master. Do NOT apply any of those fixes yet — this
+>    step is just verifying the ask-for-drop loop works end-to-end.
+>
 > 6. **Squash the drum bus hard** (extreme-values calibration data).
 >    Snapshot. `set_compressor(track_id=<DRUM_BUS_ID>, slot=0,
 >    threshold_db=-30, ratio=8.0, attack_ms=1, release_ms=200,
@@ -96,6 +107,33 @@ Paste this verbatim, with the three IDs filled in:
 >    - Predicted vs actual deltas across all four destructive steps.
 >    - Anything weird you noticed — extra renders, slow tool calls,
 >      misroutes, the agent re-orienting unnecessarily.
+
+---
+
+### What "passing" looks like for step 5b
+
+- The agent's request is **specific**: it names what kind of file
+  (e.g. "a finished commercial track in the same genre"), the
+  preferred format (WAV / FLAC / MP3 OK), and where to drop it
+  (the chat page anywhere, OR the sidebar's References zone).
+- The agent **stops and waits**. It doesn't keep tool-calling. It
+  doesn't make up a fake reference path.
+- After you drop the file, the agent recovers the new path from
+  `get_workspace_status` (or the file_dropped pill in chat) and
+  uses it directly in `compare_to_reference`.
+- The agent doesn't ask you to "render" the dropped reference — the
+  watcher analyzes drops automatically and the cache is warm.
+- The deltas are concrete (per-band dB diff + a one-line summary
+  per band), with suggestions tied to actual EQ moves.
+
+### Failure modes to watch for in step 5b
+
+- Agent doesn't ask, makes up a path, tool errors out → prompt
+  regression, the new "ask for drops" guidance isn't being followed.
+- Agent asks but is vague ("send me audio") → prompt could be
+  stronger; capture the exact text it used.
+- Agent re-renders all stems after the drop lands → confused; only
+  the new file needs analysis, the existing stems are unchanged.
 
 ---
 
