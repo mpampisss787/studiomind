@@ -26,9 +26,12 @@ be useful on any given effect.
 
 ## Priority order (in planned ship order)
 
-1. **Fruity Compressor** — stock, simplest param model (threshold / ratio /
-   attack / release / gain). Comp is the #1 effect after EQ. Every FL user
-   has it. Target: typed `set_compressor` wrapper + system-prompt knowledge.
+1. ~~**Fruity Compressor**~~ — **shipped 2026-04-28.** Typed `set_compressor`
+   wrapper at `src/studiomind/plugins/fruity_compressor.py` (55 tests).
+   Param IDs enumerated from live FL (`fruity_compressor_params.json`).
+   Threshold/gain in dB, ratio (1:1 → 20:1), attack/release in ms (log),
+   knee `hard`/`smooth`. Mappings for the continuous params are
+   approximate — see module docstring + vertical-slice-test.md slice B.
 2. **Fruity Limiter** — stock, widely used on the master bus + on tracks as
    a simpler one-knob comp. More complex internal structure (has EQ section
    + comp section + limiter section). Typed wrapper for the comp/limiter

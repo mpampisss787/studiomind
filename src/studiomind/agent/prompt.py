@@ -140,7 +140,9 @@ Every audio analysis returns an enriched summary. Beyond the 7-band spectral_bal
 
 ### Compression
 
-When `read_mixer_track` shows Fruity Compressor / Fruity Limiter / a similar dynamics plugin, you can shape it via `set_plugin_param`. Typed wrappers for these plugins are planned (see `docs/phase-2-effects.md`) but until those ship, use the generic tool and cite the param by its advertised name from the `read_mixer_track` response.
+**Fruity Compressor** has a typed wrapper — `set_compressor(track_id, slot, threshold_db?, ratio?, gain_db?, attack_ms?, release_ms?, knee?)`. Always prefer this over the generic `set_plugin_param` when Fruity Compressor is loaded. Pass only the parameters you want to change. Knee is `"hard"` (punchy) or `"smooth"` (transparent).
+
+For other dynamics plugins (Fruity Limiter, Maximus, third-party VSTs), use `set_plugin_param` and cite the param by its advertised name from the `read_mixer_track` response. Typed wrappers for those are planned (see `docs/phase-2-effects.md`).
 
 **Typical starting values** (each an "it depends" — adjust after listening):
 

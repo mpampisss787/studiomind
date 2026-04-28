@@ -564,6 +564,67 @@ TOOL_SCHEMAS = [
             "required": ["track_id", "slot", "band"],
         },
     },
+    {
+        "name": "set_compressor",
+        "description": (
+            "Set Fruity Compressor parameters using human-readable units (dB, "
+            "ratio, ms). PREFERRED for any Fruity Compressor adjustment over "
+            "the generic set_plugin_param.\n\n"
+            "Pass only the parameters you want to change — anything omitted is "
+            "left at its current FL value. Use read_mixer_track first to find "
+            "the slot the compressor is loaded in.\n\n"
+            "ALWAYS call snapshot() before using this tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "track_id": {
+                    "type": "integer",
+                    "description": "Mixer track index",
+                },
+                "slot": {
+                    "type": "integer",
+                    "description": "FX slot where Fruity Compressor is loaded (0-9)",
+                },
+                "threshold_db": {
+                    "type": "number",
+                    "minimum": -60,
+                    "maximum": 0,
+                    "description": "Threshold in dB (-60 to 0). Lower = more compression.",
+                },
+                "ratio": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Compression ratio (1=no comp, 4=4:1, 20=≈limiting).",
+                },
+                "gain_db": {
+                    "type": "number",
+                    "minimum": -20,
+                    "maximum": 20,
+                    "description": "Makeup gain in dB (-20 to +20, 0=unity).",
+                },
+                "attack_ms": {
+                    "type": "number",
+                    "minimum": 0.1,
+                    "maximum": 1000,
+                    "description": "Attack time in ms (0.1-1000, log-mapped).",
+                },
+                "release_ms": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 5000,
+                    "description": "Release time in ms (1-5000, log-mapped).",
+                },
+                "knee": {
+                    "type": "string",
+                    "enum": ["hard", "smooth"],
+                    "description": "Knee shape (hard = punchy, smooth = transparent).",
+                },
+            },
+            "required": ["track_id", "slot"],
+        },
+    },
     # ── Drill-down tools (read cached STFT, no re-render) ──────────
     {
         "name": "find_resonances",
@@ -662,6 +723,7 @@ DESTRUCTIVE_TOOLS = {
     "set_builtin_eq",
     "set_plugin_param",
     "set_proq3",
+    "set_compressor",
     "set_mixer_volume",
     "set_mixer_pan",
 }
@@ -912,6 +974,65 @@ class ToolExecutor:
             "gain_db": params.get("gain_db"),
             "q": params.get("q"),
             "shape": params.get("shape"),
+        }
+
+    def _exec_set_compressor(self, params: dict) -> Any:
+        from studiomind.plugins.fruity_compressor import build_compressor_commands
+
+        commands = build_compressor_commands(
+            track_id=params["track_id"],
+            slot=params["slot"],
+            threshold_db=params.get("threshold_db"),
+            ratio=params.get("ratio"),
+            gain_db=params.get("gain_db"),
+            attack_ms=params.get("attack_ms"),
+            release_ms=params.get("release_ms"),
+            knee=params.get("knee"),
+        )
+
+        results = []
+        for cmd in commands:
+            result = self._fl.set_plugin_param(
+                track_id=cmd["track_id"],
+                slot=cmd["slot"],
+                param_id=cmd["param_id"],
+                value=cmd["value"],
+            )
+            results.append(result)
+
+        # Build a compact human description for the decision log
+        bits = []
+        if params.get("threshold_db") is not None:
+            bits.append(f"thresh {params['threshold_db']:+.1f}dB")
+        if params.get("ratio") is not None:
+            bits.append(f"ratio {params['ratio']:.1f}:1")
+        if params.get("attack_ms") is not None:
+            bits.append(f"attack {params['attack_ms']:.1f}ms")
+        if params.get("release_ms") is not None:
+            bits.append(f"release {params['release_ms']:.0f}ms")
+        if params.get("gain_db") is not None:
+            bits.append(f"gain {params['gain_db']:+.1f}dB")
+        if params.get("knee") is not None:
+            bits.append(f"knee {params['knee']}")
+        bits_str = ", ".join(bits) if bits else "no changes"
+
+        self._log_decision(
+            tool="set_compressor",
+            params=params,
+            description=(
+                f"Fruity Compressor on track {params['track_id']} slot "
+                f"{params['slot']}: {bits_str}"
+            ),
+        )
+        return {
+            "ok": True,
+            "params_set": len(commands),
+            "threshold_db": params.get("threshold_db"),
+            "ratio": params.get("ratio"),
+            "gain_db": params.get("gain_db"),
+            "attack_ms": params.get("attack_ms"),
+            "release_ms": params.get("release_ms"),
+            "knee": params.get("knee"),
         }
 
     def _require_workspace(self) -> WorkspaceSession:
