@@ -240,22 +240,51 @@ async def post_settings(payload: SettingsPayload):
 # ───────────────────────── Workspace API ──────────────────────────
 
 
+# Last successfully detected project name + its workspace root. Used as a
+# fallback when FL is temporarily undetectable (render dialog in foreground,
+# main window minimised during export, etc.) so the sidebar doesn't blank out.
+_last_detected_project_name: str | None = None
+_last_detected_project_root: "Path | None" = None
+
+
 def _resolve_active_project():
     """Detect the active FL project and return (project, error_reason).
 
     Reads the workspace manifest from disk only — does not require a live MIDI
     connection, so this is safe to call from a poll endpoint. If FL isn't
     running or doesn't expose a project, returns (None, reason).
+
+    Falls back to the last known project when FL temporarily becomes
+    undetectable — most commonly during Ctrl+R rendering, when FL minimises
+    its main window and the title-scanner can't find it. As long as the
+    workspace folder still exists on disk, we keep showing it rather than
+    blanking the sidebar with "Waiting for FL Studio...".
     """
+    global _last_detected_project_name, _last_detected_project_root
+
     from studiomind.fl_detect import detect_fl_project
     from studiomind.workspace import open_project
 
     os_name, os_title = detect_fl_project()
-    if not os_name:
-        if os_title:
-            return None, f"FL is running but no project loaded (title: '{os_title}')."
-        return None, "FL Studio not detected on this machine."
-    return open_project(os_name), None
+
+    if os_name:
+        # Successful detection — update the cache.
+        project = open_project(os_name)
+        _last_detected_project_name = os_name
+        _last_detected_project_root = project.root
+        return project, None
+
+    # Detection failed. Check whether to fall back to the cached project.
+    if _last_detected_project_name and _last_detected_project_root:
+        if _last_detected_project_root.exists():
+            # Workspace folder still on disk → FL is likely mid-render.
+            # Return the cached project so the sidebar stays populated.
+            return open_project(_last_detected_project_name), None
+
+    # No cache or the workspace folder was deleted (project changed/closed).
+    if os_title:
+        return None, f"FL is running but project title not recognised (title: '{os_title}'). Still rendering?"
+    return None, "FL Studio not detected — open a project in FL first."
 
 
 @app.get("/api/workspace/status")
