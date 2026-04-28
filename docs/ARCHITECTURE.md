@@ -114,7 +114,9 @@ This needs testing but could replace SysEx for bulk data transfer.
 
 ---
 
-## 3. Render Pipeline (UI Automation Fallback)
+> **STALE — predates Arc 1 (2026-04-28).** The pywinauto auto-render path described below was removed; rendering is now user-assisted (Ctrl+R from FL, watcher ingests). The module layout below is also out of date — see `src/studiomind/` for the current tree, and `CLAUDE.md` for the architecture summary that's actually current.
+
+## 3. Render Pipeline (UI Automation Fallback) — REMOVED
 
 Since rendering isn't exposed in the API, we orchestrate it from outside:
 

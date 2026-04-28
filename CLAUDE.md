@@ -93,7 +93,7 @@ This is the path for initial full-mix analysis. `prepare_stem_render` + `collect
 ## API Constraints (Discovered)
 
 - `add_plugin()` is NOT in FL API → use built-in 3-band EQ (`mixer.setEqGain/Frequency/Bandwidth`)
-- `render/bounce` is NOT in FL API → need pywinauto UI automation
+- `render/bounce` is NOT in FL API → render is user-assisted (Ctrl+R from FL); the agent queues + the watcher ingests. Auto-render via pywinauto was tried and removed in Arc 1 (2026-04-28) — too flaky to build analysis features on top of.
 - MIDI notes not accessible from controller scripts → use PyFLP for offline parsing
 - FL runs its MIDI scripts in a Python 3.12 **sub-interpreter**. That blocks `_ctypes`, `_socket.socket()` construction, and parts of `tempfile` (confirmed via `scripts/device_probe.py`). Named-pipe / TCP server inside FL is impossible. `os`, `threading`, `subprocess` import OK. Stick with SysEx.
 - Built-in EQ params are normalized 0.0-1.0 (gain 0.5 = unity/0dB)

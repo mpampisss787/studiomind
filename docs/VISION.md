@@ -101,7 +101,7 @@ What it **does not** expose directly:
 - **Virtual MIDI port** (loopMIDI on Windows) carries structured commands between the companion app and FL.
 - **FL Python device script** (shipped with the app, installed once into FL's `Hardware` folder) receives those commands, executes them against the FL API, and returns structured responses over another MIDI channel or a local socket.
 - **Filesystem** is used for stem rendering (FL writes wavs, the app reads them).
-- **UI automation** (win32 / pywinauto) is the escape hatch for any operation the scripting API cannot reach.
+- **UI automation** was prototyped (win32 / pywinauto, for auto-rendering) and removed in Arc 1 — the scripting API plus user-assisted Ctrl+R cover all operations we need today, and removing the variable freed up effort for the listening-quality work.
 
 ---
 

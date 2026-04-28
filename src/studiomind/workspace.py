@@ -519,7 +519,7 @@ class WorkspaceSession:
         # canonical name. FL exports use its own naming scheme (e.g.
         # "project_KICK ▼ RAYANE.wav") which the watcher fuzzy-matches to the
         # pending entry. If that file already exists from a previous session, the
-        # watcher marks it READY before auto-render even runs, returning stale data.
+        # watcher would mark it READY immediately and return stale data.
         track_slug = slugify(track_name)
         if self._project.stems_dir.exists():
             for wav in list(self._project.stems_dir.glob("*.wav")):

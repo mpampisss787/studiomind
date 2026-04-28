@@ -943,7 +943,7 @@ class ToolExecutor:
             stop_event=self._stop_event,
         )
 
-    # First auto-render of a session frequently produces unreadable WAVs for a
+    # First batch render of a session occasionally produces unreadable WAVs for a
     # handful of tracks (FL still holding file handles / mid-overwrite). A single
     # retry 10s later almost always succeeds. Retrying more aggressively just
     # thrashes; retrying more than once rarely helps.
