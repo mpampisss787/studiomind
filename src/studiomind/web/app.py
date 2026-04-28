@@ -481,6 +481,21 @@ async def delete_reference(filename: str):
     return {"ok": True, "filename": clean}
 
 
+@app.delete("/api/workspace/drop/{filename}")
+async def delete_drop(filename: str):
+    project, err = _resolve_active_project()
+    if project is None:
+        raise HTTPException(status_code=404, detail=err or "No active project.")
+
+    # Prevent path-traversal; only allow deletion of files in drops/
+    clean = Path(filename).name
+    target = project.drops_dir / clean
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found in drops.")
+    target.unlink()
+    return {"ok": True, "filename": clean}
+
+
 # ───────────────────────── Chat WebSocket ──────────────────────────
 
 @app.websocket("/ws")

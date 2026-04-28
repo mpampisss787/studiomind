@@ -216,3 +216,42 @@ def test_relocate_strips_path_traversal(
     )
     # Either 404 (basename not present) or success with basename — never traverses.
     assert rr.status_code in (404, 200)
+
+
+# ── Delete endpoints ────────────────────────────────────────────────
+
+
+def test_delete_drop_removes_file(web_client: TestClient) -> None:
+    # Upload a file that lands in drops/
+    wav = _make_wav_bytes(duration_s=2.0, channels=1)
+    up = web_client.post(
+        "/api/workspace/upload",
+        files={"file": ("mystery.wav", wav, "audio/wav")},
+    )
+    assert up.status_code == 200, up.text
+    assert up.json()["folder"] == "drops"
+    landed_as = up.json()["filename"]
+
+    # Sidebar status should now list it
+    s = web_client.get("/api/workspace/status").json()
+    assert landed_as in s["drops"]
+
+    # Delete it
+    r = web_client.delete(f"/api/workspace/drop/{landed_as}")
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+
+    # Sidebar status should no longer list it
+    s2 = web_client.get("/api/workspace/status").json()
+    assert landed_as not in s2["drops"]
+
+
+def test_delete_drop_404_for_missing(web_client: TestClient) -> None:
+    r = web_client.delete("/api/workspace/drop/never-uploaded.wav")
+    assert r.status_code == 404
+
+
+def test_delete_drop_strips_path_traversal(web_client: TestClient) -> None:
+    r = web_client.delete("/api/workspace/drop/..%2F..%2Fetc%2Fpasswd")
+    # Basename is not present in drops/ → 404, never traverses.
+    assert r.status_code == 404
