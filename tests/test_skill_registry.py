@@ -274,6 +274,58 @@ def test_load_all_handles_empty_root(skills_root) -> None:
     assert errors == []
 
 
+# ─────────────────── content_hash CRLF normalization ───────────────────
+
+def test_content_hash_normalizes_crlf(tmp_path) -> None:
+    """Files differing only by line endings hash to the same value —
+    so a Windows autocrlf checkout doesn't false-positive as 'hand
+    edited' just because git stored CRLF on disk. Regression for the
+    2026-04-29 live-test warning storm.
+
+    Strategy: build two synthetic skill directories with byte-
+    identical manifests but the three hashed files written once
+    with LF and once with CRLF endings. Their content_hash must
+    match.
+    """
+    import json as _json
+
+    same_manifest = {
+        "schema_version": 1,
+        "name": "x",
+        "type": "plugin_wrapper",
+        "display_name": "X",
+        "tool_name": "do_x",
+        "fl_version": "21.0",
+        "acquired": "2026-04-30T15:22:08+03:00",
+        "params": [],
+    }
+    wrapper_body = "VERSION = 1\nimport math\n"
+    tool_body = "TOOL = {'name': 'do_x'}\n"
+    knowledge_body = "# X\n\n## Use\nUse it.\n"
+
+    def _make(d: Path, *, eol: bytes) -> None:
+        d.mkdir()
+        (d / "manifest.json").write_text(_json.dumps(same_manifest))
+        for fname, body in (
+            ("wrapper.py", wrapper_body),
+            ("tool.py", tool_body),
+            ("knowledge.md", knowledge_body),
+        ):
+            (d / fname).write_bytes(body.encode("utf-8").replace(b"\n", eol))
+
+    lf_dir = tmp_path / "lf_dir"
+    crlf_dir = tmp_path / "crlf_dir"
+    _make(lf_dir, eol=b"\n")
+    _make(crlf_dir, eol=b"\r\n")
+
+    # Sanity: the three on-disk files differ byte-for-byte.
+    for fname in ("wrapper.py", "tool.py", "knowledge.md"):
+        assert (lf_dir / fname).read_bytes() != (crlf_dir / fname).read_bytes()
+
+    # ...but the hash function normalizes that drift away.
+    assert registry.compute_content_hash(lf_dir) == registry.compute_content_hash(crlf_dir)
+
+
 # ─────────────────── knowledge concatenation ───────────────────
 
 def test_build_knowledge_section_concatenates_in_order(skills_root) -> None:

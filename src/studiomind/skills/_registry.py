@@ -78,7 +78,14 @@ def compute_content_hash(skill_dir: Path) -> str:
     """SHA-256 over canonicalized manifest (minus its hash field) +
     wrapper.py + tool.py + knowledge.md, in that order. Two
     acquisitions of the same plugin on the same FL version with
-    matching readbacks should produce the same hash."""
+    matching readbacks should produce the same hash.
+
+    Line endings are normalized to LF before hashing so a Windows
+    autocrlf checkout matches its Linux source. Without this, every
+    skill loaded on Windows would warn 'content_hash mismatch ...
+    Hand edit since acquisition?' (false positive observed in the
+    2026-04-29 live test). LF-only files hash to the same bytes as
+    before, so existing manifests stay valid."""
     manifest_path = skill_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest_for_hash = {k: v for k, v in manifest.items() if k != "content_hash"}
@@ -89,7 +96,7 @@ def compute_content_hash(skill_dir: Path) -> str:
     for filename in ("wrapper.py", "tool.py", "knowledge.md"):
         path = skill_dir / filename
         h.update(b"\x1e")  # record separator between files
-        h.update(path.read_bytes())
+        h.update(path.read_bytes().replace(b"\r\n", b"\n"))
     return f"sha256:{h.hexdigest()}"
 
 

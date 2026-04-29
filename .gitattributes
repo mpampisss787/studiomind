@@ -1,0 +1,42 @@
+# Force LF line endings on all text source so content_hash and other
+# byte-exact invariants stay stable across Linux + Windows checkouts.
+#
+# Without this, Windows machines with the default core.autocrlf=true
+# store CRLF on disk, and registry/_registry.compute_content_hash
+# (which we already CRLF-normalize defensively) drifts away from
+# tools that don't normalize. The 2026-04-29 live test surfaced this
+# as a "Skill content_hash mismatch" warning storm even though the
+# files were a clean checkout — git itself was rewriting line endings
+# on the way to disk.
+
+# Source / config — always LF
+*.py        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.toml      text eol=lf
+*.txt       text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+
+# Shell scripts — LF (so they run under bash)
+*.sh        text eol=lf
+
+# PowerShell scripts: CRLF is conventional on Windows, but git's normal
+# auto behavior is fine for these. No explicit override.
+
+# Binary files — never touched
+*.wav       binary
+*.mp3       binary
+*.flac      binary
+*.aiff      binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.zip       binary
+*.tar       binary
+*.gz        binary
+*.pdf       binary
+*.ico       binary
