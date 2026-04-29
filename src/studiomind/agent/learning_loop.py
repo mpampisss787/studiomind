@@ -407,12 +407,19 @@ class TrainingOrchestrator:
         return written
 
     def run_pytest(self) -> PytestResult:
-        """Run pytest on the skill's tests.py. Falls back to FAILURE
-        if pytest itself errors out — the agent should treat any
-        non-pass result as a hard stop."""
+        """Run pytest on the skill's tests.py. Routes through
+        ``run_pytest_for_skill`` with ``cwd=repo_root`` and
+        ``PYTHONPATH=<repo_root>/src`` so a skill living at a
+        non-default repo location (tests, sandboxed environments)
+        can still be imported by the subprocess."""
         self.session.set_step("testing")
         self._persist()
-        result = run_pytest_for_skill(self.skill_name)
+        src_path = (self.repo_root / "src").resolve()
+        result = run_pytest_for_skill(
+            self.skill_name,
+            cwd=self.repo_root,
+            extra_env={"PYTHONPATH": str(src_path)},
+        )
         return result
 
     # ───────────────── step 8: commit ─────────────────

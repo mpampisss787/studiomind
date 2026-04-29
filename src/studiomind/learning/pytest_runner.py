@@ -74,8 +74,15 @@ def _parse_summary(stdout: str) -> tuple[int, int, int]:
     return passed, failed, errors
 
 
-def _build_env() -> dict[str, str]:
-    """Minimal environment for the pytest subprocess."""
+def _build_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Minimal environment for the pytest subprocess.
+
+    ``extra`` is merged in last, so callers can extend (e.g. inject
+    PYTHONPATH for an out-of-tree skill location, or set
+    STUDIOMIND_DEBUG). The reproducibility-critical vars
+    (PYTHONHASHSEED, PYTHONDONTWRITEBYTECODE) are seeded first; if
+    ``extra`` overrides them, the caller has explicitly opted in.
+    """
     env: dict[str, str] = {
         "PYTHONHASHSEED": "0",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -85,6 +92,8 @@ def _build_env() -> dict[str, str]:
         v = os.environ.get(k)
         if v is not None:
             env[k] = v
+    if extra:
+        env.update(extra)
     return env
 
 
@@ -92,6 +101,8 @@ def run_pytest_for_skill(
     skill_name: str,
     *,
     timeout_s: float = 60.0,
+    extra_env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> PytestResult:
     """Run pytest against a single skill's ``tests.py`` in a subprocess.
 
@@ -118,11 +129,11 @@ def run_pytest_for_skill(
         "-q", "--tb=short", "--no-header",
         str(tests_path),
     ]
-    env = _build_env()
+    env = _build_env(extra_env)
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, cwd=REPO_ROOT, env=env,
+            cmd, cwd=str(cwd or REPO_ROOT), env=env,
             capture_output=True, text=True,
             timeout=timeout_s,
         )

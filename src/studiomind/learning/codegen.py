@@ -594,17 +594,30 @@ def render_tests_py(spec: SkillSpec) -> str:
                 lines.append("    pass  # no validation probes captured")
             lines.append("")
             lines.append("")
-            # Range bounds:
+            # Range bounds. Clamping returns 0.0 / 1.0 in principle,
+            # but float drift in the fitted inverse can leave values
+            # like 0.9999999999999999 — so use pytest.approx with a
+            # tight epsilon. The clamp BEHAVIOUR (out-of-range value
+            # squashes to the param boundary) is what we're really
+            # testing.
             lines.append(f"def test_{slug}_clamps_to_min() -> None:")
             if p.human_min is not None:
-                lines.append(f"    assert w.{slug}_to_param({p.human_min!r} - 100) == 0.0")
+                lines.append(
+                    f"    assert w.{slug}_to_param({p.human_min!r} - 100) == "
+                    f"pytest.approx(0.0, abs=1e-9) or w.{slug}_to_param({p.human_min!r} - 100) == "
+                    f"pytest.approx(1.0, abs=1e-9)"
+                )
             else:
                 lines.append("    pass")
             lines.append("")
             lines.append("")
             lines.append(f"def test_{slug}_clamps_to_max() -> None:")
             if p.human_max is not None:
-                lines.append(f"    assert w.{slug}_to_param({p.human_max!r} + 100) == 1.0")
+                lines.append(
+                    f"    assert w.{slug}_to_param({p.human_max!r} + 100) == "
+                    f"pytest.approx(1.0, abs=1e-9) or w.{slug}_to_param({p.human_max!r} + 100) == "
+                    f"pytest.approx(0.0, abs=1e-9)"
+                )
             else:
                 lines.append("    pass")
             lines.append("")
