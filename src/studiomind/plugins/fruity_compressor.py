@@ -24,10 +24,10 @@ CALIBRATION (2026-04-29, two-point readback against live FL):
   * RELEASE: linear [0, 4000] ms. Confirmed by Run A (param 0.5145 →
     2058 ms) and Run B (param 0.6221 → 2489 ms).
   * KNEE: hard at 0.0, smooth at 1.0. Confirmed.
-  * RATIO: NOT linear [1, 20]. Two points (param 0.0526 → 2.0:1, param
-    0.3684 → 11.3:1) confirm a non-linear curve. The current ratio
-    helpers fall back to a six-point curve fit committed in the
-    ratio sweep step (see scripts/sweep_compressor_ratio.py).
+  * RATIO: linear [0.4, 30.0]. Confirmed by six-point sweep
+    (param 0.0/0.2/0.4/0.6/0.8/1.0 → 0.4/6.3/12.2/18.2/24.1/30.0).
+    Least-squares fit: ratio = 0.386 + 29.629 * param. The earlier
+    two-point quadratic was a wrong hypothesis from sparse data.
 """
 
 from __future__ import annotations
@@ -66,9 +66,15 @@ ATTACK_MAX_MS = 400.0
 RELEASE_MIN_MS = 0.0
 RELEASE_MAX_MS = 4000.0
 
-# Ratio: non-linear; fit lives in _RATIO_FIT below. Min ratio at param=0
-# is 1:1; max at param=1 depends on the fit (FL goes well past 20:1).
+# Ratio: linear in displayed-ratio units, fit against six-point sweep.
+# FL displays 0.4 at param=0 and 30.0 at param=1 (param 0.5 ≈ 15.2:1).
+# We expose RATIO_MIN=1.0 / RATIO_MAX=30.0 as the *practical* compression
+# range (sub-1:1 is expansion and not meaningful for a downward comp);
+# the underlying fit lives in _RATIO_FIT_INTERCEPT / _RATIO_FIT_SLOPE.
 RATIO_MIN = 1.0
+RATIO_MAX = 30.0
+_RATIO_FIT_INTERCEPT = 0.386
+_RATIO_FIT_SLOPE = 29.629
 
 # Type (knee). Hard / Smooth are the two FL stock knee modes.
 KNEE_HARD = 0.0
@@ -96,32 +102,20 @@ def param_to_threshold(value: float) -> float:
     return THRESHOLD_MIN_DB + value * (THRESHOLD_MAX_DB - THRESHOLD_MIN_DB)
 
 
-# Provisional 2-point quadratic ratio fit (ratio - 1 = a*p + b*p^2):
-#   (param=0.0526, ratio=2.0)  and  (param=0.3684, ratio=11.3)
-# Replace with the 6-point fit from scripts/sweep_compressor_ratio.py once
-# that data is in.
-_RATIO_FIT_A = 17.52
-_RATIO_FIT_B = 28.33
-_RATIO_MAX_FROM_FIT = 1.0 + _RATIO_FIT_A + _RATIO_FIT_B  # ratio at param=1.0
-
-
 def ratio_to_param(ratio: float) -> float:
     """Convert compression ratio (e.g. 4.0 for 4:1) to normalized parameter.
 
-    Uses the two-point quadratic fit; invert by solving b*p^2 + a*p - (r-1) = 0.
+    Uses the six-point linear fit:  ratio = intercept + slope * param.
+    Inputs are clamped to the practical compression range [1.0, 30.0].
     """
-    ratio = _clamp(ratio, RATIO_MIN, _RATIO_MAX_FROM_FIT)
-    if ratio <= RATIO_MIN:
-        return 0.0
-    # b*p^2 + a*p - (ratio-1) = 0  →  p = (-a + sqrt(a^2 + 4*b*(ratio-1))) / (2b)
-    disc = _RATIO_FIT_A ** 2 + 4.0 * _RATIO_FIT_B * (ratio - RATIO_MIN)
-    return _clamp((-_RATIO_FIT_A + math.sqrt(disc)) / (2.0 * _RATIO_FIT_B), 0.0, 1.0)
+    ratio = _clamp(ratio, RATIO_MIN, RATIO_MAX)
+    return _clamp((ratio - _RATIO_FIT_INTERCEPT) / _RATIO_FIT_SLOPE, 0.0, 1.0)
 
 
 def param_to_ratio(value: float) -> float:
-    """Convert normalized parameter to compression ratio."""
+    """Convert normalized parameter to compression ratio (FL display units)."""
     value = _clamp(value, 0.0, 1.0)
-    return RATIO_MIN + _RATIO_FIT_A * value + _RATIO_FIT_B * value * value
+    return _RATIO_FIT_INTERCEPT + _RATIO_FIT_SLOPE * value
 
 
 def gain_to_param(db: float) -> float:

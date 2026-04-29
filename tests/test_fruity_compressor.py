@@ -26,7 +26,7 @@ def test_threshold_round_trip(db: float) -> None:
     assert fc.param_to_threshold(p) == pytest.approx(db, abs=1e-6)
 
 
-@pytest.mark.parametrize("ratio", [1.0, 1.5, 2.0, 4.0, 8.0, 20.0])
+@pytest.mark.parametrize("ratio", [1.0, 1.5, 2.0, 4.0, 8.0, 11.3, 20.0, 30.0])
 def test_ratio_round_trip(ratio: float) -> None:
     p = fc.ratio_to_param(ratio)
     assert 0.0 <= p <= 1.0
@@ -67,9 +67,13 @@ def test_threshold_max_at_param_one() -> None:
     assert fc.threshold_to_param(0.0) == pytest.approx(1.0, abs=1e-9)
 
 
-def test_ratio_unity_at_param_zero() -> None:
-    """1:1 ratio (no compression) maps to param=0.0."""
-    assert fc.ratio_to_param(1.0) == pytest.approx(0.0, abs=1e-9)
+def test_ratio_unity_near_param_zero() -> None:
+    """1:1 ratio (no compression) maps just above 0 — FL's intercept is
+    at ratio≈0.386 (sub-unity expansion territory we never expose), so
+    1.0 lands at a small positive param value."""
+    p = fc.ratio_to_param(1.0)
+    assert 0.0 < p < 0.05
+    assert fc.param_to_ratio(p) == pytest.approx(1.0, abs=1e-6)
 
 
 def test_attack_linear_against_live_readback() -> None:
@@ -95,11 +99,18 @@ def test_gain_range_is_thirty_db_each_way() -> None:
     assert fc.param_to_gain(1.0) == pytest.approx(30.0, abs=1e-9)
 
 
-def test_ratio_quadratic_against_live_readback() -> None:
-    """Live-FL readback (2026-04-29 calibration): param 0.0526 -> 2.0:1,
-    param 0.3684 -> 11.3:1. Two-point quadratic fit r-1 = a*p + b*p^2."""
-    assert fc.param_to_ratio(0.0526) == pytest.approx(2.0, abs=0.05)
-    assert fc.param_to_ratio(0.3684) == pytest.approx(11.3, abs=0.1)
+def test_ratio_linear_against_live_readback() -> None:
+    """Live-FL six-point sweep (2026-04-29):
+        param 0.0 -> 0.4,   0.2 -> 6.3,   0.4 -> 12.2,
+        param 0.6 -> 18.2,  0.8 -> 24.1,  1.0 -> 30.0
+    Least-squares fit: ratio = 0.386 + 29.629 * param. Tolerance 0.1
+    absorbs FL's one-decimal display rounding."""
+    assert fc.param_to_ratio(0.0) == pytest.approx(0.4, abs=0.1)
+    assert fc.param_to_ratio(0.2) == pytest.approx(6.3, abs=0.1)
+    assert fc.param_to_ratio(0.4) == pytest.approx(12.2, abs=0.1)
+    assert fc.param_to_ratio(0.6) == pytest.approx(18.2, abs=0.1)
+    assert fc.param_to_ratio(0.8) == pytest.approx(24.1, abs=0.1)
+    assert fc.param_to_ratio(1.0) == pytest.approx(30.0, abs=0.1)
 
 
 # ───────────────────────────── Clamping ───────────────────────────────
@@ -113,11 +124,16 @@ def test_threshold_clamps_below_min() -> None:
 
 
 def test_ratio_clamps_below_one() -> None:
-    assert fc.ratio_to_param(0.5) == 0.0
+    """Sub-unity ratio (expansion) is clamped up to 1.0:1, which lands
+    just above param=0 under FL's linear fit (intercept ≈ 0.4)."""
+    assert fc.ratio_to_param(0.5) == fc.ratio_to_param(1.0)
+    assert fc.ratio_to_param(0.5) < 0.05
 
 
 def test_ratio_clamps_above_max() -> None:
-    assert fc.ratio_to_param(1000.0) == 1.0
+    """1000:1 clamps to RATIO_MAX (30:1) and lands at the top of the param range."""
+    assert fc.ratio_to_param(1000.0) == fc.ratio_to_param(fc.RATIO_MAX)
+    assert fc.ratio_to_param(1000.0) > 0.99
 
 
 def test_gain_clamps() -> None:
@@ -294,8 +310,9 @@ def test_default_values_round_trip_to_plausible_humans() -> None:
     assert state.gain_db == pytest.approx(0.0, abs=1e-3)
     # Knee default is hard
     assert state.knee == "hard"
-    # Ratio default in plausible "gentle starting comp" range
-    assert 1.0 < state.ratio < 3.0, f"ratio default decoded to {state.ratio}"
+    # Ratio default decodes to ≈1:1 — FL's factory default is "no
+    # compression engaged," confirmed by the live linear fit.
+    assert state.ratio == pytest.approx(1.0, abs=0.05), f"ratio default decoded to {state.ratio}"
     # Attack default in "fast" range (< 50 ms)
     assert 0.1 <= state.attack_ms < 50.0
     # Release default in "moderate" range (1–500 ms)
