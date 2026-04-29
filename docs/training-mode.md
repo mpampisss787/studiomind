@@ -84,7 +84,42 @@ What the user actually sees and does to acquire the Limiter wrapper:
 
 ## Architecture
 
+### Robustness invariants (call these out so the design choices below make sense)
+
+These are the constraints we're optimising for. Anything that violates one
+of these is the wrong call regardless of how much code it saves.
+
+1. **Hermetic skills.** A skill is a self-contained directory. Adding,
+   deleting, or replacing a skill must touch *only* that directory plus a
+   single registry-validation cache. No surgery on shared files.
+2. **Single-source enforcement.** Every sandbox check goes through one
+   function. Every git operation goes through one function. Anything
+   not explicitly allowed is rejected (fail-closed).
+3. **Mode exclusivity.** Mixing and Training cannot run concurrently in
+   the same StudioMind instance. Switching mode requires the current
+   mode to be idle. Skills installed during a Mixing session are
+   ignored until the next session — no hot-reload.
+4. **Resumable.** Training sessions persist their state after every
+   step. Browser close, websocket drop, FL crash → session can be
+   resumed without losing accumulated samples.
+5. **Auditable.** Every commit produced by Training mode carries a
+   distinguishing trailer that says so. Every skill carries the
+   calibration log it was built from.
+6. **Idempotent acquisition.** Acquiring the same plugin on the same
+   FL version twice produces byte-identical wrapper code (modulo
+   whitespace) and the same content hash. Repro is a property, not an
+   accident.
+7. **Schema-versioned.** Skill manifests carry a `schema_version`. The
+   loader refuses to load a skill whose schema is too new or too old
+   for the running StudioMind version.
+
 ### Layout
+
+Each skill is a self-contained directory under `src/studiomind/skills/`.
+**No append-edits to shared files.** No `tools.py` surgery, no
+patches to `prompt.py`. The registry walks `skills/` at startup and
+discovers everything by reading manifests — adding a skill is a `git
+add` of one tree, deleting a skill is `rm -rf` of one tree.
 
 ```
 src/studiomind/
@@ -93,26 +128,39 @@ src/studiomind/
     learning_loop.py       # NEW — training agent loop
     learning_tools.py      # NEW — calibration + code-edit tools
     learning_prompt.py     # NEW — student-agent system prompt
-  skill_registry.py        # NEW — scans skills/, builds prompt addition
-  plugins/                 # existing — typed wrappers (skill artifact #1)
+    sandbox.py             # NEW — single-source path/git enforcement
+  skills/                  # NEW — skills directory (replaces plugins/)
+    __init__.py            # marker only; never edited by training agent
+    _registry.py           # walks subdirs at startup, validates manifests
+    fabfilter_proq3/       # retro-wrapped skill (P3)
+      __init__.py
+      manifest.json        # schema_version, fl_version, content_hash, ...
+      wrapper.py           # the typed wrapper module
+      tool.py              # tool spec + executor binding
+      knowledge.md         # use cases + gotchas (loaded into mixing prompt)
+      tests.py             # tests for this skill
+      calibration-logs/    # per-acquisition logs
+        2026-04-30T15-22-08.json
+    fruity_compressor/     # retro-wrapped skill (P3)
+    fruity_limiter/        # first acquired skill via training mode (P6)
+    ...
   web/
     app.py                 # adds /api/training/* + /ws/training
     static/
       index.html           # existing chat
       training.html        # NEW — training-mode UI
-skills/                    # NEW — knowledge notes (skill artifact #3)
-  fabfilter_proq3.md
-  fruity_compressor.md
-  (one per acquired skill)
-tests/                     # existing — wrapper tests (skill artifact #2)
+src/studiomind/plugins/    # KEPT as a thin re-export shim during P3 migration
+                           # so older code that imports from plugins/ continues
+                           # to resolve while we move callers to skills/.
+                           # Removed in P3-final once no callers reference it.
 docs/
   training-mode.md         # this doc
 ```
 
 `learning_loop.py` is a separate module from `loop.py` because the tool
-surfaces and prompts are genuinely different. They can share lower-level
-plumbing (Anthropic client, tool dispatch, compaction) via small
-helpers; no duplication of agent core.
+surfaces and prompts are genuinely different. They share an
+`agent/_core.py` for lower-level plumbing (Anthropic client, tool
+dispatch, compaction). No duplication of agent core.
 
 ### Training-agent tool surface (~12 tools)
 
@@ -130,29 +178,62 @@ helpers; no duplication of agent core.
   picks unsampled values, drives them, asks for readback, checks
   prediction. Returns pass/fail + per-probe deltas.
 
-**Code edit (sandboxed to whitelisted paths only):**
-- `read_repo_file(path)`
-- `write_repo_file(path, content)` — does NOT touch disk; queues a
-  proposed write reviewed by user via UI
+**Code edit (sandboxed to one and only one skill directory at a time):**
+- `read_repo_file(path)` — read-only; allowed across the repo
+- `propose_write(path, content)` — does NOT touch disk; queues a
+  proposed write. Path must resolve under `src/studiomind/skills/<name>/`
+  for the *current* skill being acquired. Anything else fails.
 - `apply_proposed_writes(approval_token)` — flushes the queue to disk
-  after user clicks Approve
-- `run_pytest(path_filter)` — runs in-process, returns structured result
-- `propose_commit(message, files)` — stages + previews; user clicks
-  Approve to commit. Never pushes.
+  after user clicks Approve. Token is server-issued and one-shot.
+- `run_pytest(skill_name)` — runs `pytest src/studiomind/skills/<name>/tests.py`
+  in a subprocess with a 60s timeout. Returns structured result.
+- `propose_commit(message, paths, approval_token)` — stages + previews;
+  user approval gate. Trailer-tagged. Never pushes.
 
-### Sandbox rules
+### Sandbox rules — one assertion, fail-closed
 
-Writable paths whitelist (rejected outside this set, no glob escapes):
-- `src/studiomind/plugins/*.py`
-- `src/studiomind/plugins/*.json`
-- `tests/test_*.py`
-- `skills/*.md`
-- `src/studiomind/agent/tools.py` (append-only edit mode — see below)
+All write/git/test tools route through `agent/sandbox.py`:
 
-Append-only mode for `tools.py`: the writer accepts only a "register
-new tool" delta — a tool name, schema, and executor binding — and
-rejects any edit that touches existing tool definitions. This keeps
-the existing tool surface intact when the training agent adds one.
+- `assert_path_writable(path, current_skill)` — resolves the path to its
+  real on-disk location (including symlinks), checks it sits under
+  `src/studiomind/skills/<current_skill>/`, rejects anything else.
+  No `..` escapes (`os.path.realpath` resolves to absolute first).
+  No symlink escapes (rejects if the resolved real path leaves the
+  skill directory). Specifically blocks: `.git/`, `.claude/`,
+  `~/.ssh`, `~/.config`, `~/obsidian-vault`, anything outside the
+  repo working tree.
+
+- `assert_safe_git(args)` — accepts only an explicit allowlist of
+  invocations: `git add <skill-paths>`, `git status`, `git diff`,
+  `git commit -m <message>`. Rejects: `push`, `rebase`, `reset
+  --hard`, `checkout`, `branch -D`, `clean`, anything with `--force`,
+  any global config edit. The exact allowlist is unit-tested; tests
+  are mandatory before P2 ships.
+
+- `assert_pytest_safe(skill_name)` — pytest invocation must target a
+  single skill's tests file. Wildcard runs and `--no-cov` style
+  trickery rejected. Pytest runs in a subprocess with `PYTHONHASHSEED=0`
+  for reproducibility.
+
+The single-source rule means *every* future tool that touches disk or
+git **must** call into `sandbox.py`. Code review checklist line item.
+
+### Mode exclusivity
+
+A `mode_lock.json` in `~/StudioMind/state/` records which mode a
+StudioMind instance is in (`mixing` / `training` / `idle`) and the
+PID of the running process. Switching modes requires:
+1. Current mode is `idle` (no in-flight tool calls), OR
+2. The recorded PID is no longer running (lock is stale; reclaim).
+
+The web UI's mode toggle calls `/api/mode` which performs the lock
+dance atomically. Clear UI state ("Cannot switch — mixing session
+in progress; finish or abort first") if the lock is held.
+
+Skills installed during a running mixing session are **ignored** by
+that session. The mixing prompt is built from the registry at
+session start, period. Hot-reload is intentionally not supported —
+adds complexity and failure modes for a marginal UX win.
 
 Hard `NEVER`s — even with user approval, training mode refuses to
 write or stage:
@@ -167,31 +248,60 @@ Operational `NEVER`s:
 - Never pushes — push remains explicit human action per global rule
 - Never rewrites git history (no amends, no rebases)
 
-### Skill manifest
+### Skill structure
 
-`skills/<name>.md`:
+Each skill is a directory under `src/studiomind/skills/<name>/` with
+five files (plus a calibration-logs subdir):
+
+```
+src/studiomind/skills/fruity_limiter/
+  __init__.py                    # re-exports wrapper + tool symbols
+  manifest.json                  # versioned schema; the source of truth
+  wrapper.py                     # typed wrapper (param ↔ human conversions)
+  tool.py                        # @tool spec + executor; exports `TOOL`
+  knowledge.md                   # use cases + gotchas (markdown body only)
+  tests.py                       # pytest tests for the wrapper + tool
+  calibration-logs/
+    2026-04-30T15-22-08.json     # samples + fits + validation probes
+```
+
+`manifest.json` is the source of truth. `knowledge.md`'s frontmatter
+is *not* parsed for skill metadata; it's only the human-readable
+prompt content. This separation keeps the loader robust against
+markdown edits.
+
+```json
+{
+  "schema_version": 1,
+  "name": "fruity_limiter",
+  "type": "plugin_wrapper",
+  "display_name": "Fruity Limiter",
+  "tool_name": "set_limiter",
+  "fl_version": "21.2.10",
+  "acquired": "2026-04-30T15:22:08+03:00",
+  "calibration_log": "calibration-logs/2026-04-30T15-22-08.json",
+  "content_hash": "sha256:c39a...",
+  "params": [
+    {"id": 0, "name": "Ceiling",  "kind": "continuous", "fit": {"shape": "linear", "params": [60.0, -60.0], "r_squared": 0.99987}},
+    {"id": 1, "name": "Release",  "kind": "continuous", "fit": {"shape": "linear", "params": [4000.0, 0.0], "r_squared": 0.99940}},
+    {"id": 2, "name": "Style",    "kind": "enum",       "values": {"hard": 0.0, "smooth": 0.5, "transparent": 1.0}}
+  ],
+  "validation_probes": [
+    {"param_id": 0, "param_value": 0.13, "predicted": -52.2, "actual": -52.2, "ok": true},
+    {"param_id": 0, "param_value": 0.71, "predicted": -17.4, "actual": -17.4, "ok": true},
+    {"param_id": 1, "param_value": 0.27, "predicted": 1080,  "actual": 1080,  "ok": true},
+    {"param_id": 1, "param_value": 0.83, "predicted": 3320,  "actual": 3320,  "ok": true}
+  ]
+}
+```
+
+`knowledge.md` body (no frontmatter — just the prompt content):
 
 ```markdown
----
-type: plugin_wrapper
-plugin_name: Fruity Limiter
-fl_version: "21.2.10"
-acquired: 2026-04-30
-wrapper_module: studiomind.plugins.fruity_limiter
-test_module: tests.test_fruity_limiter
-tool_name: set_limiter
-calibration_log: training-logs/fruity_limiter-2026-04-30T15-22-08.json
----
-
 # Fruity Limiter
 
 ## Capabilities
 Brick-wall limiting for masters and bus loudness control.
-
-## Parameter shapes (calibrated 2026-04-30)
-- CEILING: linear [-60, 0] dB, R²=0.9998
-- LEVEL: linear [-12, +24] dB, R²=0.9999
-- RELEASE: linear [0, 4000] ms, R²=0.9994
 
 ## Use cases
 - **Master bus** (last in chain): ceiling -0.3 dBTP, level +3 to +6 dB
@@ -200,22 +310,50 @@ Brick-wall limiting for masters and bus loudness control.
 - **Drum bus crush**: short release (~50 ms), level +6 to +9 dB.
 
 ## Gotchas
-- Sub-bass (<60 Hz) can hit limiter early — high-pass before for
-  cleaner ceilings.
+- Sub-bass (<60 Hz) can hit limiter early — high-pass before for cleaner ceilings.
 - "Release" knob doesn't affect peak limiter, only the level stage.
 ```
 
-The skill registry (`skill_registry.py`) on session start:
-1. Scans `skills/*.md`
-2. Validates the wrapper module + test module + tool name exist
-3. Builds a "Skills" section appended to the mixing system prompt with
-   each skill's `## Use cases` and `## Gotchas` blocks (capped — only
-   skills the agent might use this session, ranked by recency or
-   relevance to the active project)
-4. Registers the typed tool with the agent loop
+`content_hash` is `sha256(canonical_json(manifest_minus_hash) +
+wrapper.py + tool.py + knowledge.md)`. Two acquisitions of the same
+plugin on the same FL version should produce the same hash — that's
+the idempotency check.
 
-This is the **mechanism by which teaching translates to "the agent now
-knows X."** Skills are pluggable and shareable.
+The skill registry (`skills/_registry.py`) on session start:
+
+1. Walks `src/studiomind/skills/*/manifest.json`
+2. Validates `schema_version` matches what this StudioMind build
+   supports. Skills with a too-new schema are skipped with a clear
+   warning ("upgrade studiomind to use skill X"); too-old schemas
+   are skipped pending migration.
+3. Re-computes `content_hash`; logs a warning if it doesn't match
+   the recorded hash (someone edited a skill file by hand —
+   tamper-detection, not enforcement).
+4. Imports `wrapper.py` + `tool.py`; collects the exported `TOOL`
+   from each.
+5. Loads `knowledge.md`'s body and concatenates into a "Skills"
+   section appended to the mixing system prompt.
+6. **No relevance filtering. All valid skills load.** Hard cap of 50
+   skills before we re-evaluate; below that, prompt bloat is a
+   non-problem. If we cross it, deal with it then with real data.
+
+The mixing agent gets every registered skill's tool added to its
+schema and every skill's knowledge appended to its prompt. The
+training agent does not get skill tools — it builds them, doesn't
+use them.
+
+### Schema versioning + migrations
+
+`schema_version` increments only when a skill manifest field changes
+in a backwards-incompatible way. Migration scripts live at
+`src/studiomind/skills/_migrations/v<from>_to_v<to>.py` and are
+applied by the registry on load: if a skill is at v1 and code is at
+v2, run the migration in-memory (do not rewrite the on-disk
+manifest until the user explicitly runs `studiomind migrate-skills`).
+
+For v1, schema_version is `1`. We will not break it without a
+migration script and a regression test that loads a captured v1
+fixture and confirms it migrates cleanly.
 
 ### Curve fitter
 
@@ -243,26 +381,50 @@ This is the lesson from Fruity Compressor's ratio: the 2-point
 DoF) but was the wrong shape. Six points + R² gating + simplest-wins
 catches that class of mistake.
 
-### Validation gate
+### Validation gate — four smart probes
 
-After generating the wrapper but **before** commit:
+After generating the wrapper but **before** commit, probe the live
+plugin at four param values that were *not* in the calibration sweep:
 
-1. Pick two unsampled param values per axis (e.g., 0.13 and 0.71)
-2. Drive them via the wrapper's `human_to_param` function
-3. Ask user for FL readbacks
-4. Compute relative error vs wrapper's `param_to_human(value_we_set)`
-5. **Pass** if all probes within tolerance:
-   - Continuous: `abs(predicted - actual) < max(0.5, 0.01 * predicted)`
-   - Enum: exact string match
-6. **Fail** → ask for 3 more samples at the failing region; re-fit;
-   re-validate
+1. **Two extremity probes** — near the high-residual ends of the
+   sample range. If samples are at p ∈ {0.0, 0.2, 0.4, 0.6, 0.8, 1.0},
+   probe at 0.05 and 0.95.
+2. **Two cross-shape disagreement probes** — pick the two param
+   values where the leading fit shape and the runner-up fit shape
+   predict the most different displayed values. Catches overfitting
+   to a wrong family even when both fits had high R².
 
-Probes are random per session; not the same two points each time.
-Logged so a future audit can re-run them.
+For each probe:
+- Drive the param via the wrapper's `*_to_param` function
+- Ask user for FL readback
+- Compute predicted-vs-actual delta
+
+**Pass** if all four probes are within tolerance:
+- Continuous: `abs(predicted - actual) < max(0.5, 0.01 * abs(predicted))`
+- Enum: exact string match
+
+**Fail** → ask for 3 more samples at the failing region's midpoints;
+re-fit; re-validate. Up to 3 retry rounds before the agent surfaces
+"this plugin's curve is too irregular for v1's fitter, escalate to
+human" and aborts the acquisition.
+
+Probe selection is deterministic given the sample set (no RNG):
+extremity points at fixed offsets, disagreement points by analytic
+maximum of `|fit_a(p) - fit_b(p)|`. Same input samples → same probe
+points. Reproducibility across sessions is a feature, not a bug.
+
+All probes (samples, predictions, actuals, deltas) land in the
+calibration log.
 
 ### Calibration logs
 
-`~/StudioMind/training-logs/<plugin>-<iso-timestamp>.json`:
+`src/studiomind/skills/<name>/calibration-logs/<iso-timestamp>.json`.
+Logs travel **with** the skill — committed to the repo alongside the
+wrapper, so re-fitting from samples after a wrapper update doesn't
+require finding a separate logs directory. One log per acquisition
+(re-acquisitions append a new file; previous logs are preserved).
+
+Format:
 
 ```json
 {
@@ -311,6 +473,76 @@ Logs serve three purposes:
    probes and check whether the readbacks still match.
 3. **Skill auditing.** "When did this skill get added, what was the FL
    version, what was the R²?"
+
+### Resumability
+
+Training mode persists session state to
+`~/StudioMind/state/training-session.json` after every step. The file
+captures: target plugin, current step, accumulated samples per param,
+fits computed so far, validation probes done. If the websocket
+disconnects, the browser is closed, FL crashes, or the user kills the
+StudioMind process, the next launch of training mode offers:
+
+> Resume Fruity Limiter acquisition?  
+> You were on CEILING calibration, point 4 of 6.
+
+Three buttons: **Resume**, **Restart this skill**, **Discard session**.
+Resume re-attaches; restart re-runs from the beginning of the current
+skill (samples discarded); discard nukes the state and returns to the
+"What should I learn?" prompt.
+
+Mid-acquisition FL connection drops surface as a clear error in chat,
+not silent extrapolation. The agent does not invent samples to fill
+gaps. If FL is gone, the user must reconnect and click Resume.
+
+### Approval tokens
+
+The "user clicks Approve, agent commits" flow is mediated by
+server-issued one-shot tokens to prevent prompt-injection scenarios
+where a malicious tool result could trick the agent into commiting
+without UI approval.
+
+Flow:
+1. Agent calls `propose_writes(payload)` or `propose_commit(payload)`.
+   Backend stores the payload, generates a `secrets.token_urlsafe(32)`
+   nonce, returns it to the agent (which forwards it to the UI via WS).
+2. UI renders preview (diff or commit summary). User clicks Approve.
+3. UI POSTs `{token, action: 'approve'}` to `/api/training/approve`.
+   Backend validates the token: exists, not consumed, not expired
+   (10-minute TTL), payload hash matches.
+4. Backend marks token consumed, performs the action atomically, posts
+   `approved` event back over WS so the agent learns the outcome.
+5. Tokens are consumed exactly once. Replay is rejected.
+
+The agent **cannot** apply writes or commits without a valid consumed
+token. Tool implementations enforce this — the only way to flip the
+state is for the UI to make the approval call.
+
+### Audit trail — commit trailer
+
+Every commit produced by training mode carries a structured trailer:
+
+```
+Skill-Acquired-Via: studiomind-training-mode
+Skill-Name: fruity_limiter
+Skill-Schema-Version: 1
+Skill-Content-Hash: sha256:c39a...
+Calibration-Log: src/studiomind/skills/fruity_limiter/calibration-logs/2026-04-30T15-22-08.json
+FL-Version: 21.2.10
+```
+
+`git log --grep='Skill-Acquired-Via'` lists all training-mode commits.
+Trailers are validated by the commit tool — agent cannot omit them.
+
+### Reproducibility
+
+Same plugin, same FL version, same readback values → byte-identical
+wrapper code (modulo whitespace) and same `content_hash`. The code
+generator emits canonical formatting (one fixed style; no random
+ordering of dict keys; no relative timestamps inside the wrapper —
+those go in the manifest). Curve fits use deterministic numpy with
+fixed random seed (irrelevant for least-squares; matters if we ever
+add stochastic methods).
 
 ## Web UI shape
 
@@ -390,28 +622,68 @@ payload types:
 | Phase | Scope | Acceptance |
 |-------|-------|------------|
 | **P0** | This design doc + ADR | Reviewed, approved |
-| **P1** | Curve fitter library + tests | 6-point fit picks correct shape on synthetic data for all 5 candidate shapes; R² gating works |
-| **P2** | Sandboxed code-edit tools + pytest runner + tests | Can read/write/commit a no-op file in a clean test repo; refuses paths outside whitelist |
-| **P3** | Skill registry + manifest loader | Existing Pro-Q 3 + Fruity Comp wrappers wrapped as skills with `skills/<name>.md`; mixing-mode prompt picks them up |
-| **P4** | Training agent loop + system prompt | Driving sweeps over MIDI bridge end-to-end; logs to `training-logs/` |
-| **P5** | Web UI: `/training` page + WebSocket | Limiter acquisition runs cleanly start-to-finish |
-| **P6** | First real acquisition: Fruity Limiter | Wrapper + tests + skill note committed; mixing agent demonstrably uses `set_limiter` next session |
+| **P1** | Curve fitter library + tests | 6-point fit picks correct shape on synthetic data for all 5 candidate shapes; R² gating refuses < 0.99; simplest-shape tiebreak verified; deterministic across runs |
+| **P2** | `agent/sandbox.py` + pytest-runner + tests | Single-source path enforcement (allowed paths pass; `..` escapes, symlinks out, `.git`, vault all rejected); git allowlist enforced; pytest-runner invokes subprocess with timeout; tamper attempts in tests prove fail-closed |
+| **P3** | Skill registry + retro-wrap existing wrappers | Pro-Q 3 + Fruity Compressor migrated to `src/studiomind/skills/<name>/` with full manifests + content hashes; mixing agent boots and uses both via the registry; `plugins/` becomes a thin re-export shim; full suite still green |
+| **P4** | Training agent loop + system prompt + resumability | Mock-driven end-to-end run synthesises sample readbacks, fits, validates, generates wrapper for a fake plugin schema, commits in a test repo. Resume from disk works after kill-and-restart. |
+| **P5** | Web UI: `/training` page + `/ws/training` + approval token flow | Tokens issued, validated, consumed-once. UI rejects without token. Mode-lock toggle works. |
+| **P6** | First real acquisition: Fruity Limiter | Wrapper + tests + manifest + knowledge committed under `src/studiomind/skills/fruity_limiter/`. `set_limiter` tool surfaces in mixing mode after restart. Calibration log archived in skill dir. |
 
-Phases are sequential. P1 and P2 are pure-Linux work; P3-P6 require
-live FL on Windows (P6 mandatory; P4/P5 testable with mocks plus a
-short live shake-out).
+Phases are sequential. P1, P2, P3, P4 are pure-Linux work (P4 with
+mocked MIDI); P5 has Linux + Windows pieces; P6 is the live
+acceptance test on Windows.
 
-## Open design questions
+Each phase ships green tests as part of its acceptance criteria. No
+phase is "done" until its tests pass and the existing suite still
+passes. We will not skip ahead.
 
-1. **Should the training agent run on Sonnet or Opus?** Probably Opus
-   for code generation (wrappers + tests must be correct) but Sonnet
-   for the conversational sweep flow (cheaper, faster, fewer tokens).
-   Could route by tool category.
-2. **How does the user fix a botched skill mid-session?** "Restart this
-   axis" / "Abort this skill" buttons in the UI — but the proposed
-   diff is the natural rollback point.
-3. **Should we surface the calibration log in the chat UI, or just
-   write it silently?** Probably write silently + link in the
-   commit-approval screen.
+## Decisions resolved (no longer open)
 
-These are not blockers for P1; revisit at the P5 boundary.
+These were initially open questions; the robustness lens picked them.
+
+1. **Single agent loop with mode flag, or two loops?** → **Two loops.**
+   `learning_loop.py` and `loop.py` share `agent/_core.py` for the
+   plumbing (Anthropic client, compaction, tool dispatch) but the
+   agent surfaces are otherwise independent. Tool-set leakage between
+   modes is the failure we cannot afford.
+2. **Skill registry — relevance filter, or always-load?** →
+   **Always-load**, with a hard cap of 50 skills before we revisit.
+   Relevance filtering is an optimisation that adds debugging
+   complexity ("why doesn't the agent know about my limiter") for a
+   marginal token win.
+3. **Where do generated wrapper files live?** → **In a hermetic skill
+   directory** at `src/studiomind/skills/<name>/`. Adding/removing a
+   skill is one tree, no surgery on shared files.
+4. **`tools.py` append-only edit vs per-skill `tool.py`?** →
+   **Per-skill `tool.py`**, auto-discovered by the registry. No
+   shared-file edits during acquisition.
+5. **Validation gate — 2 random probes or 4 smart probes?** →
+   **4 deterministic smart probes**: 2 extremity + 2 cross-shape
+   disagreement. Reproducible across sessions.
+6. **Where do calibration logs live?** → **In-skill at
+   `src/studiomind/skills/<name>/calibration-logs/`**. Logs travel
+   with the skill they describe.
+7. **Approval flow — boolean flag or token-gated?** →
+   **Server-issued one-shot tokens.** Prompt-injection-safe.
+8. **Hot-reload of newly-installed skills mid mixing session?** →
+   **No.** Skills load only at session start. Mode exclusivity
+   prevents simultaneous training + mixing anyway.
+9. **Should the agent run on Sonnet or Opus?** → **Opus for code
+   generation, Sonnet for conversational sweep flow.** Route by
+   tool category. Cheaper sweeps, careful code.
+10. **What about non-deterministic curve fits?** → **Deterministic
+    only.** Numpy with fixed seed; canonical code formatting.
+    Reproducibility is a guarantee, not a hope.
+
+## Still open (revisit at P5)
+
+1. How granular should the chat UI's "now sweeping CEILING param 4/6"
+   progress display be? Single progress bar, per-param breakdown, or
+   timeline view?
+2. Should knowledge-only "skills" be allowed (no wrapper, just a
+   prompt addition)? Useful for capturing genre conventions or
+   reference material; but blurs the v1 scope. Lean *no* unless a
+   compelling use case appears during P4.
+3. Should the registry warn on `content_hash` mismatch (someone hand-
+   edited a skill file) loudly or silently? Probably loudly during
+   P3-P5, then re-evaluate based on real false-positive rate.
