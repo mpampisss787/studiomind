@@ -1,0 +1,4 @@
+14:14:51 [INFO] studiomind: File logging enabled → C:\Users\Chapo\StudioMind\logs\session-20260429-141451.log
+14:14:51 [INFO] studiomind.bridge.midi_client: Opened MIDI output: Default App Loopback (A) 3
+14:14:51 [INFO] studiomind.bridge.midi_client: Opened MIDI input: Default App Loopback (A) 2
+14:14:51 [DEBUG] studiomind.bridge.midi_client: Sent request seq=0 method=ping (1 chunks)
