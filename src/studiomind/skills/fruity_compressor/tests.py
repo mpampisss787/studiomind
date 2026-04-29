@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from studiomind.plugins import fruity_compressor as fc
+from studiomind.skills.fruity_compressor import wrapper as fc
 
 
 # ───────────────────────────── Round-trip ─────────────────────────────
@@ -278,10 +278,7 @@ def test_param_ids_match_enumerated_json() -> None:
     """The PARAM_* constants must agree with the IDs that the live-FL
     enumeration script wrote to fruity_compressor_params.json. If FL ever
     renumbers these, this test breaks loud and we re-enumerate."""
-    json_path = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "studiomind" / "plugins" / "fruity_compressor_params.json"
-    )
+    json_path = Path(__file__).resolve().parent / "fruity_compressor_params.json"
     data = json.loads(json_path.read_text())
     by_name = {p["name"]: p["id"] for p in data["params"]}
     assert by_name["Threshold"] == fc.PARAM_THRESHOLD
@@ -297,10 +294,7 @@ def test_default_values_round_trip_to_plausible_humans() -> None:
     """The factory defaults from the JSON should decode to sensible human
     values. If we ever change the calibration, this test catches whether
     the new mapping moved the defaults into nonsense territory."""
-    json_path = (
-        Path(__file__).resolve().parent.parent
-        / "src" / "studiomind" / "plugins" / "fruity_compressor_params.json"
-    )
+    json_path = Path(__file__).resolve().parent / "fruity_compressor_params.json"
     data = json.loads(json_path.read_text())
     defaults = {p["id"]: p["default_value"] for p in data["params"]}
     state = fc.decode_state(defaults)

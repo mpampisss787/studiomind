@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "name": "fabfilter_proq3",
+  "type": "plugin_wrapper",
+  "display_name": "FabFilter Pro-Q 3",
+  "tool_name": "set_proq3",
+  "fl_version": "21.2.10",
+  "acquired": "2026-04-23T00:00:00+03:00",
+  "calibration_log": null,
+  "params": [
+    {
+      "id": 0,
+      "name": "Used",
+      "kind": "enum",
+      "values": {
+        "unused": 0.0,
+        "used": 1.0
+      }
+    },
+    {
+      "id": 1,
+      "name": "Enabled",
+      "kind": "enum",
+      "values": {
+        "disabled": 0.0,
+        "enabled": 1.0
+      }
+    },
+    {
+      "id": 2,
+      "name": "Frequency",
+      "kind": "continuous",
+      "fit": {
+        "shape": "log",
+        "params": [
+          10.0,
+          30000.0
+        ],
+        "r_squared": null,
+        "note": "Hand-written pre-training; not measurement-fit. Range 10-30000 Hz on log scale."
+      }
+    },
+    {
+      "id": 3,
+      "name": "Gain",
+      "kind": "continuous",
+      "fit": {
+        "shape": "linear",
+        "params": [
+          60.0,
+          -30.0
+        ],
+        "r_squared": null,
+        "note": "Linear -30 to +30 dB; unity at 0.5."
+      }
+    },
+    {
+      "id": 4,
+      "name": "Dynamic Range",
+      "kind": "continuous",
+      "fit": {
+        "shape": "linear",
+        "params": [
+          60.0,
+          -30.0
+        ],
+        "r_squared": null
+      }
+    },
+    {
+      "id": 5,
+      "name": "Dyn Enabled",
+      "kind": "enum",
+      "values": {
+        "off": 0.0,
+        "on": 1.0
+      }
+    },
+    {
+      "id": 6,
+      "name": "Threshold",
+      "kind": "continuous"
+    },
+    {
+      "id": 7,
+      "name": "Q",
+      "kind": "continuous",
+      "fit": {
+        "shape": "log",
+        "params": [
+          0.025,
+          40.0
+        ],
+        "r_squared": null,
+        "note": "Log scale 0.025-40; Q=1.0 at param=0.5."
+      }
+    },
+    {
+      "id": 8,
+      "name": "Shape",
+      "kind": "enum"
+    },
+    {
+      "id": 9,
+      "name": "Slope",
+      "kind": "enum"
+    },
+    {
+      "id": 10,
+      "name": "Stereo",
+      "kind": "enum"
+    },
+    {
+      "id": 11,
+      "name": "Speakers",
+      "kind": "continuous"
+    }
+  ],
+  "validation_probes": [],
+  "origin": "pre-training-mode (hand-written 2026-04-23)",
+  "content_hash": "sha256:979daaaea6e58b1ef028176458d7e3d43c32d17fab463f98089996c6bbc1a52b"
+}
