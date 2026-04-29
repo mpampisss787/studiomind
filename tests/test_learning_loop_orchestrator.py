@@ -280,10 +280,34 @@ def test_abort_marks_session_aborted(fake_repo: Path, session_path: Path) -> Non
 
 # ───────────────────────────── Anthropic shell ────────────────────────
 
-def test_training_agent_run_is_p5_placeholder(fake_repo: Path, session_path: Path) -> None:
+def test_training_agent_constructor_requires_client_or_api_key(
+    fake_repo: Path, session_path: Path, monkeypatch,
+) -> None:
+    """Without an injected anthropic_client AND no API key, the
+    constructor must raise so the user gets a clear message instead
+    of a confused failure mid-run."""
+    from studiomind.agent.learning_loop import TrainingAgent
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(
+        "studiomind.config.get_anthropic_key",
+        lambda: None,
+    )
+    orch = _make_orch(fake_repo, session_path)
+    with pytest.raises(RuntimeError, match="No Anthropic API key"):
+        TrainingAgent(orch)
+
+
+def test_training_agent_accepts_injected_client(
+    fake_repo: Path, session_path: Path,
+) -> None:
+    """A mock client lets tests drive the loop without an API key.
+    Constructor stores the orchestrator unchanged."""
     from studiomind.agent.learning_loop import TrainingAgent
     orch = _make_orch(fake_repo, session_path)
-    agent = TrainingAgent(orch)
-    with pytest.raises(NotImplementedError):
-        agent.run("acquire X")
+
+    class _MockClient:  # noqa: D401 — minimal stub
+        messages = None  # not used when run() isn't called
+
+    agent = TrainingAgent(orch, anthropic_client=_MockClient())
     assert agent.orchestrator is orch
+    assert agent.last_text_response == ""

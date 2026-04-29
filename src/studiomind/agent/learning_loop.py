@@ -18,7 +18,9 @@ Reading this file top-to-bottom mirrors the wizard order.
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -543,39 +545,202 @@ def resume_orchestrator(
 
 @dataclass
 class TrainingAgentConfig:
-    """Configuration for the LLM-driven loop. Wired in P5 once the
-    web UI / CLI mounts a real readback provider."""
+    """Configuration for the LLM-driven training loop."""
     model: str = "claude-opus-4-7"
     max_turns: int = 60
+    max_tokens: int = 4096
     on_message: Callable[[str], None] | None = None
 
 
 class TrainingAgent:
-    """Thin Anthropic wrapper around a TrainingOrchestrator. P4 ships
-    only the constructor + a placeholder ``run`` so P5's web UI has a
-    stable import target. The actual tool dispatch is wired in P5."""
+    """Anthropic-driven loop that surfaces the orchestrator's steps
+    as Claude tools.
+
+    The agent runs the full enumerate → classify → sweep → fit →
+    validate → codegen → write → test → commit wizard with the LLM
+    as the orchestrator. The user (via the readback_provider) and the
+    server (via the approval_store) are the only blocking
+    dependencies — everything else is automated.
+
+    The Anthropic client is injectable so tests can drive the loop
+    with canned tool_use responses (no API key needed)."""
 
     def __init__(
         self,
         orchestrator: TrainingOrchestrator,
         *,
         config: TrainingAgentConfig | None = None,
+        anthropic_client: Any | None = None,
     ) -> None:
         self._orch = orchestrator
         self._config = config or TrainingAgentConfig()
+        self._stop_event = threading.Event()
+
+        if anthropic_client is None:
+            try:
+                import anthropic
+            except ImportError as e:  # pragma: no cover — import error path
+                raise ImportError(
+                    "anthropic package required for TrainingAgent.run. "
+                    "Install with: pip install anthropic"
+                ) from e
+            from studiomind.config import get_anthropic_key
+            api_key = get_anthropic_key()
+            if not api_key:
+                raise RuntimeError(
+                    "No Anthropic API key configured. Set ANTHROPIC_API_KEY "
+                    "or save a key in the web UI settings."
+                )
+            self._client = anthropic.Anthropic(api_key=api_key)
+        else:
+            self._client = anthropic_client
+
+        # Lazy import: keeps learning_loop importable even if learning_tools
+        # gets a circular dependency surface in the future.
+        from studiomind.agent.learning_tools import TrainingDispatchState
+        self._dispatch_state = TrainingDispatchState()
+
+        self._final_text: str = ""
 
     @property
     def orchestrator(self) -> TrainingOrchestrator:
         return self._orch
 
-    def run(self, user_goal: str) -> str:  # pragma: no cover — wired in P5
-        """Placeholder. P5 will:
-          1. Build the system prompt via build_training_system_prompt()
-          2. Build the tool list (one Anthropic tool per orchestrator step)
-          3. Drive Anthropic's tool-use loop
-          4. Surface readback + approval requests over /ws/training
+    @property
+    def last_text_response(self) -> str:
+        return self._final_text
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self, user_goal: str) -> str:
+        """Drive the wizard end-to-end. Returns the agent's final text
+        message — typically a one-line summary of what was acquired
+        (or why it aborted).
+
+        Conversation flow:
+          - System prompt = build_training_system_prompt()
+          - First user message = ``user_goal``
+          - Per turn: API call → emit text via on_message →
+            execute every tool_use through learning_tools.execute_training_tool
+            → feed back tool_results → next turn
+          - Stop conditions: stop_reason='end_turn', no tool calls in
+            response, max_turns hit, or stop_event set.
         """
-        raise NotImplementedError(
-            "TrainingAgent.run is wired in P5; for P4 the orchestrator is "
-            "exercised directly by tests and the CLI subcommand."
+        from studiomind.agent.learning_prompt import build_training_system_prompt
+        from studiomind.agent.learning_tools import (
+            TRAINING_TOOL_SCHEMAS,
+            execute_training_tool,
         )
+
+        self._stop_event.clear()
+        self._final_text = ""
+
+        system = build_training_system_prompt()
+        # Prompt caching: cache the system prompt + tool list so per-turn
+        # input cost stays low across the long acquisition wizard.
+        system_blocks = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+        tools = [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "input_schema": t["input_schema"],
+            }
+            for t in TRAINING_TOOL_SCHEMAS
+        ]
+        if tools:
+            tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
+
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": user_goal},
+        ]
+
+        for turn in range(self._config.max_turns):
+            if self._stop_event.is_set():
+                log.info("Training agent stopped by user at turn %d", turn + 1)
+                if self._config.on_message:
+                    self._config.on_message("[Training stopped by user.]")
+                break
+            log.info("Training agent turn %d/%d", turn + 1, self._config.max_turns)
+
+            response = self._client.messages.create(
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                system=system_blocks,
+                tools=tools,
+                tool_choice={"type": "auto", "disable_parallel_tool_use": True},
+                messages=messages,
+            )
+
+            text_parts: list[str] = []
+            tool_calls: list[Any] = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_calls.append(block)
+
+            if text_parts:
+                text = "\n".join(text_parts)
+                self._final_text = text
+                if self._config.on_message:
+                    self._config.on_message(text)
+
+            if not tool_calls:
+                log.info("Training agent finished (no more tool calls)")
+                break
+
+            tool_results: list[dict[str, Any]] = []
+            for tc in tool_calls:
+                tool_results.append(self._execute_one_tool(tc, execute_training_tool))
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+
+            if response.stop_reason == "end_turn":
+                log.info("Training agent finished (end_turn)")
+                break
+        else:
+            log.warning(
+                "Training agent hit max_turns limit (%d)",
+                self._config.max_turns,
+            )
+            if self._config.on_message:
+                self._config.on_message(
+                    f"[Training agent reached the {self._config.max_turns}-turn "
+                    "limit. Stopping. Resume with `studiomind train --resume` "
+                    "to continue the wizard.]"
+                )
+
+        return self._final_text
+
+    def _execute_one_tool(
+        self,
+        tool_use_block: Any,
+        dispatch: Callable[..., dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Run one tool, serialize the result. Errors come back as a
+        tool_result with is_error=True so the agent can decide to retry
+        or abort instead of crashing the loop."""
+        try:
+            result = dispatch(
+                self._orch,
+                tool_use_block.name,
+                dict(tool_use_block.input or {}),
+                state=self._dispatch_state,
+            )
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_use_block.id,
+                "content": json.dumps(result, default=str),
+            }
+        except Exception as e:
+            log.exception("Training tool %s failed", tool_use_block.name)
+            return {
+                "type": "tool_result",
+                "tool_use_id": tool_use_block.id,
+                "content": json.dumps({"error": str(e), "type": type(e).__name__}),
+                "is_error": True,
+            }
