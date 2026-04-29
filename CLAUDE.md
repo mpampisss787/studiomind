@@ -89,6 +89,7 @@ This is the path for initial full-mix analysis. `prepare_stem_render` + `collect
 | Plugin | File | Status |
 |--------|------|--------|
 | FabFilter Pro-Q 3 | `src/studiomind/plugins/fabfilter_proq3.py` | Complete — 10 bands, Hz/dB/Q conversions |
+| Fruity Compressor | `src/studiomind/plugins/fruity_compressor.py` | Complete — 6 params, approximate calibration (live FL readback pending) |
 
 ## API Constraints (Discovered)
 
@@ -102,18 +103,18 @@ This is the path for initial full-mix analysis. `prepare_stem_render` + `collect
 
 ## Development Status
 
-1. ~~API Research~~ — Complete, 1000-line reference doc in vault
-2. ~~SysEx Protocol~~ — Complete, 7 tests passing
-3. ~~FL Device Script~~ — Complete, 13 commands
-4. ~~MIDI Client~~ — Complete, threaded async
-5. ~~Agent Loop~~ — Complete, Claude tool use + preview gate
-6. ~~Windows round-trip test~~ — Live on Win11 25H2 ARM64 via MS MIDI Services loopback (2026-04-23)
-7. ~~Workspace data model~~ — Project folders + session.json + staleness hashing (2026-04-23, 15 tests)
-8. ~~Render loop Phase 1b~~ — prepare_batch_render + file-watcher + collect_all_renders (2026-04-23, 44 tests)
-9. **Live end-to-end test on Windows** ← NEXT
-10. Memory + sample library — user.json, decisions.json, samples/ fingerprints
-11. Vertical slice ("Cut 2dB at 300Hz on piano")
-12. Full MVP ("Mix this professionally")
+1. ~~API Research~~ — Complete
+2. ~~SysEx Protocol~~ — Complete, 7 tests
+3. ~~FL Device Script~~ — Complete, 14 commands (added set_send for sidechain)
+4. ~~MIDI Client~~ — Complete
+5. ~~Agent Loop~~ — Complete, orient_all (1 turn), compaction 50k, 282 tests
+6. ~~Windows round-trip~~ — Live on Win11 25H2 ARM64 (2026-04-23)
+7. ~~Phase 1 EQ vertical slice~~ — koto project, 3 fix/verify cycles confirmed (2026-04-28)
+8. ~~Phase 2 Compressor~~ — set_compressor typed wrapper, calibration pending live FL data
+9. ~~Phase 2 Sidechain~~ — apply_sidechain (API half + advisory for FL dropdown)
+10. **Compressor calibration** — need knob readback from live FL ← CURRENT
+11. Phase 2 next wrappers — Limiter, Reeverb 2, Delay 3, Stereo Enhancer (need param enum runs)
+12. Full MVP ("Mix this professionally") — partial, needs apply_sidechain + set_compressor live test
 
 ## Windows Setup (driver-free)
 
