@@ -1,8 +1,16 @@
 """set_proq3 tool spec + executor binding for the FabFilter Pro-Q 3 skill.
 
-The schema (TOOL) is consumed by the mixing agent's tool registry at
-session start. The executor (execute) builds the SysEx commands via
-the wrapper module and dispatches them through the agent's FL bridge.
+The skill exposes four entry points consumed by the mixing agent's
+registry-driven dispatch (see ``studiomind.agent.tools.ToolExecutor``):
+
+  * ``TOOL`` — JSON schema sent to Claude.
+  * ``build_commands_from_args(args)`` — pure args-to-SysEx-commands
+    helper, useful in tests.
+  * ``execute(fl, args)`` — full dispatch: builds commands, drives them
+    through the FL bridge, returns the result dict the mixing agent
+    sees as the tool's output.
+  * ``description_from_args(args)`` — one-line human description used
+    by the centralized decision logger.
 """
 
 from __future__ import annotations
@@ -91,5 +99,38 @@ def build_commands_from_args(args: dict[str, Any]) -> list[dict[str, Any]]:
         q=args.get("q"),
         shape=args.get("shape"),
         slope_db_oct=args.get("slope_db_oct"),
-        enabled=args.get("enabled"),
+        enabled=args.get("enabled", True),
+    )
+
+
+def execute(fl: Any, args: dict[str, Any]) -> dict[str, Any]:
+    """Drive every command through the FL bridge and return the result
+    dict the mixing agent sees. Mirrors the shape the hand-written
+    executor produced before P3-C, so callers and prompt fragments that
+    expect ``params_set`` keep working."""
+    commands = build_commands_from_args(args)
+    for cmd in commands:
+        fl.set_plugin_param(
+            track_id=cmd["track_id"],
+            slot=cmd["slot"],
+            param_id=cmd["param_id"],
+            value=cmd["value"],
+        )
+    return {
+        "ok": True,
+        "band": args["band"],
+        "params_set": len(commands),
+        "frequency_hz": args.get("frequency_hz"),
+        "gain_db": args.get("gain_db"),
+        "q": args.get("q"),
+        "shape": args.get("shape"),
+    }
+
+
+def description_from_args(args: dict[str, Any]) -> str:
+    """Compact, one-line description for the decision log."""
+    return (
+        f"Pro-Q 3 band {args['band']} on track {args['track_id']} "
+        f"({args.get('shape', 'bell')} {args.get('frequency_hz', '?')}Hz "
+        f"{args.get('gain_db', 0)}dB Q={args.get('q', '?')})"
     )

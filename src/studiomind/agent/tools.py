@@ -8,12 +8,16 @@ Each tool has:
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from studiomind.bridge.commands import FLStudio
+from studiomind.skills._registry import Skill
 from studiomind.workspace import WorkspaceSession
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # TOOL SCHEMAS (sent to Claude API)
@@ -513,69 +517,9 @@ TOOL_SCHEMAS = [
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
-    {
-        "name": "set_proq3",
-        "description": (
-            "Set FabFilter Pro-Q 3 EQ bands using human-readable values (Hz, dB, Q). "
-            "This is the PREFERRED tool for EQ adjustments when Pro-Q 3 is loaded on a track. "
-            "It handles all parameter conversions automatically.\n\n"
-            "Pro-Q 3 has 10 bands. Each band can be: bell, low_shelf, low_cut, high_shelf, "
-            "high_cut, notch, band_pass, or tilt_shelf.\n\n"
-            "ALWAYS call snapshot() before using this tool."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "track_id": {
-                    "type": "integer",
-                    "description": "Mixer track index",
-                },
-                "slot": {
-                    "type": "integer",
-                    "description": "FX slot where Pro-Q 3 is loaded (0-9)",
-                },
-                "band": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 10,
-                    "description": "Pro-Q 3 band number (1-10)",
-                },
-                "frequency_hz": {
-                    "type": "number",
-                    "minimum": 10,
-                    "maximum": 30000,
-                    "description": "Center frequency in Hz (10-30000)",
-                },
-                "gain_db": {
-                    "type": "number",
-                    "minimum": -30,
-                    "maximum": 30,
-                    "description": "Gain in dB (-30 to +30, 0=unity)",
-                },
-                "q": {
-                    "type": "number",
-                    "minimum": 0.025,
-                    "maximum": 40,
-                    "description": "Q factor / bandwidth (0.025=very wide, 40=very narrow, 1.0=default)",
-                },
-                "shape": {
-                    "type": "string",
-                    "enum": ["bell", "low_shelf", "low_cut", "high_shelf", "high_cut", "notch", "band_pass", "tilt_shelf"],
-                    "description": "Filter shape (default: bell)",
-                },
-                "slope_db_oct": {
-                    "type": "integer",
-                    "enum": [6, 12, 18, 24, 36, 48, 72, 96],
-                    "description": "Filter slope in dB/oct (for cut/shelf shapes, default: 12)",
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "Whether the band is active (default: true)",
-                },
-            },
-            "required": ["track_id", "slot", "band"],
-        },
-    },
+    # set_proq3 is now provided by the FabFilter Pro-Q 3 skill at
+    # src/studiomind/skills/fabfilter_proq3/tool.py and merged into the
+    # tool list at agent boot via build_tool_schemas(skills).
     {
         "name": "apply_sidechain",
         "description": (
@@ -615,67 +559,9 @@ TOOL_SCHEMAS = [
             "required": ["source_track", "target_track"],
         },
     },
-    {
-        "name": "set_compressor",
-        "description": (
-            "Set Fruity Compressor parameters using human-readable units (dB, "
-            "ratio, ms). PREFERRED for any Fruity Compressor adjustment over "
-            "the generic set_plugin_param.\n\n"
-            "Pass only the parameters you want to change — anything omitted is "
-            "left at its current FL value. Use read_mixer_track first to find "
-            "the slot the compressor is loaded in.\n\n"
-            "ALWAYS call snapshot() before using this tool."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "track_id": {
-                    "type": "integer",
-                    "description": "Mixer track index",
-                },
-                "slot": {
-                    "type": "integer",
-                    "description": "FX slot where Fruity Compressor is loaded (0-9)",
-                },
-                "threshold_db": {
-                    "type": "number",
-                    "minimum": -60,
-                    "maximum": 0,
-                    "description": "Threshold in dB (-60 to 0). Lower = more compression.",
-                },
-                "ratio": {
-                    "type": "number",
-                    "minimum": 1,
-                    "maximum": 20,
-                    "description": "Compression ratio (1=no comp, 4=4:1, 20=≈limiting).",
-                },
-                "gain_db": {
-                    "type": "number",
-                    "minimum": -20,
-                    "maximum": 20,
-                    "description": "Makeup gain in dB (-20 to +20, 0=unity).",
-                },
-                "attack_ms": {
-                    "type": "number",
-                    "minimum": 0.1,
-                    "maximum": 1000,
-                    "description": "Attack time in ms (0.1-1000, log-mapped).",
-                },
-                "release_ms": {
-                    "type": "number",
-                    "minimum": 1,
-                    "maximum": 5000,
-                    "description": "Release time in ms (1-5000, log-mapped).",
-                },
-                "knee": {
-                    "type": "string",
-                    "enum": ["hard", "smooth"],
-                    "description": "Knee shape (hard = punchy, smooth = transparent).",
-                },
-            },
-            "required": ["track_id", "slot"],
-        },
-    },
+    # set_compressor is now provided by the Fruity Compressor skill at
+    # src/studiomind/skills/fruity_compressor/tool.py and merged into the
+    # tool list at agent boot via build_tool_schemas(skills).
     # ── Drill-down tools (read cached STFT, no re-render) ──────────
     {
         "name": "find_resonances",
@@ -769,16 +655,51 @@ TOOL_SCHEMAS = [
 # TOOL EXECUTORS
 # ═══════════════════════════════════════════════════════════════════
 
-# Tools that modify FL Studio state — require snapshot first
+# Built-in tools that modify FL Studio state — require snapshot first.
+# Skill-provided destructive tools are merged in via compute_destructive_tools()
+# at AgentLoop boot, so this set holds only the hand-written built-ins.
 DESTRUCTIVE_TOOLS = {
     "set_builtin_eq",
     "set_plugin_param",
-    "set_proq3",
-    "set_compressor",
     "set_mixer_volume",
     "set_mixer_pan",
     "apply_sidechain",
 }
+
+
+def build_tool_schemas(skills: Iterable[Skill] | None = None) -> list[dict[str, Any]]:
+    """Combine the built-in TOOL_SCHEMAS with every loaded skill's TOOL spec.
+
+    Skills are appended after the built-ins in stable name order so the
+    cache_control marker the loop attaches to the last entry stays
+    deterministic across runs and the Anthropic prompt cache stays warm
+    through new skill installs.
+    """
+    out: list[dict[str, Any]] = list(TOOL_SCHEMAS)
+    if skills:
+        for skill in sorted(skills, key=lambda s: s.name):
+            tool_spec = getattr(skill.tool, "TOOL", None)
+            if not isinstance(tool_spec, dict):
+                logger.warning(
+                    "Skill %s has no TOOL dict on its tool module — skipping.",
+                    skill.name,
+                )
+                continue
+            out.append(tool_spec)
+    return out
+
+
+def compute_destructive_tools(skills: Iterable[Skill] | None = None) -> set[str]:
+    """Return the union of built-in DESTRUCTIVE_TOOLS plus every skill
+    whose manifest declares ``destructive: true`` (the v1 default for
+    plugin_wrapper). The agent's preview gate consults this set to
+    decide whether a given tool call needs user approval."""
+    out: set[str] = set(DESTRUCTIVE_TOOLS)
+    if skills:
+        for skill in skills:
+            if skill.destructive:
+                out.add(skill.tool_name)
+    return out
 
 # Tools that only read state — safe to execute without confirmation
 READ_ONLY_TOOLS = {
@@ -811,17 +732,67 @@ class ToolExecutor:
         fl: FLStudio,
         workspace: WorkspaceSession | None = None,
         stop_event: threading.Event | None = None,
+        skills: Iterable[Skill] | None = None,
     ) -> None:
         self._fl = fl
         self._workspace = workspace
         self._stop_event = stop_event or threading.Event()
+        # Skills indexed by their public tool_name (e.g. "set_proq3"). The
+        # generic _exec_skill_tool dispatcher routes calls here when the
+        # built-in _exec_<name> handler doesn't exist. None == empty.
+        self._skills_by_tool_name: dict[str, Skill] = {
+            s.tool_name: s for s in (skills or ())
+        }
 
     def execute(self, tool_name: str, tool_input: dict[str, Any]) -> Any:
-        """Execute a tool call and return the result."""
+        """Execute a tool call and return the result.
+
+        Skill-provided tools take precedence over built-in handlers to
+        keep the registry the source of truth: if a skill has registered
+        the same tool name as an obsolete built-in, the skill wins. v1
+        skills carry distinct names so this only matters for migrations.
+        """
+        skill = self._skills_by_tool_name.get(tool_name)
+        if skill is not None:
+            return self._exec_skill_tool(skill, tool_input)
         handler = getattr(self, f"_exec_{tool_name}", None)
         if handler is None:
             return {"error": f"Unknown tool: {tool_name}"}
         return handler(tool_input)
+
+    def _exec_skill_tool(self, skill: Skill, params: dict[str, Any]) -> Any:
+        """Dispatch a skill-provided tool. The skill's tool module owns
+        the result shape (via its ``execute(fl, args)``); the executor
+        owns the side-effects we always want (decision logging)."""
+        execute_fn = getattr(skill.tool, "execute", None)
+        if not callable(execute_fn):
+            return {
+                "error": (
+                    f"Skill {skill.name!r} does not expose an execute(fl, args) "
+                    f"function — cannot dispatch tool {skill.tool_name!r}."
+                )
+            }
+        result = execute_fn(self._fl, params)
+
+        description = self._describe_skill_call(skill, params)
+        self._log_decision(
+            tool=skill.tool_name,
+            params=params,
+            description=description,
+        )
+        return result
+
+    @staticmethod
+    def _describe_skill_call(skill: Skill, params: dict[str, Any]) -> str:
+        """Use the skill's optional ``description_from_args`` if provided,
+        otherwise fall back to a generic one-liner."""
+        describe = getattr(skill.tool, "description_from_args", None)
+        if callable(describe):
+            try:
+                return describe(params)
+            except Exception:  # noqa: BLE001 — never break a tool call on log formatting
+                logger.debug("description_from_args failed for %s", skill.name, exc_info=True)
+        return f"{skill.display_name} call ({skill.tool_name})"
 
     def _exec_read_project_state(self, params: dict) -> Any:
         return self._fl.read_project_state()
@@ -984,155 +955,10 @@ class ToolExecutor:
             ws.project.analyses_dir,
         )
 
-    def _exec_set_proq3(self, params: dict) -> Any:
-        from studiomind.plugins.fabfilter_proq3 import build_eq_commands, param_to_freq, param_to_gain, param_to_q
-
-        commands = build_eq_commands(
-            track_id=params["track_id"],
-            slot=params["slot"],
-            band=params["band"],
-            frequency_hz=params.get("frequency_hz"),
-            gain_db=params.get("gain_db"),
-            q=params.get("q"),
-            shape=params.get("shape"),
-            slope_db_oct=params.get("slope_db_oct"),
-            enabled=params.get("enabled", True),
-        )
-
-        results = []
-        for cmd in commands:
-            result = self._fl.set_plugin_param(
-                track_id=cmd["track_id"],
-                slot=cmd["slot"],
-                param_id=cmd["param_id"],
-                value=cmd["value"],
-            )
-            results.append(result)
-
-        self._log_decision(
-            tool="set_proq3",
-            params=params,
-            description=(
-                f"Pro-Q 3 band {params['band']} on track {params['track_id']} "
-                f"({params.get('shape', 'bell')} {params.get('frequency_hz', '?')}Hz "
-                f"{params.get('gain_db', 0)}dB Q={params.get('q', '?')})"
-            ),
-        )
-        return {
-            "ok": True,
-            "band": params["band"],
-            "params_set": len(commands),
-            "frequency_hz": params.get("frequency_hz"),
-            "gain_db": params.get("gain_db"),
-            "q": params.get("q"),
-            "shape": params.get("shape"),
-        }
-
-    def _exec_set_compressor(self, params: dict) -> Any:
-        from studiomind.plugins.fruity_compressor import build_compressor_commands
-
-        commands = build_compressor_commands(
-            track_id=params["track_id"],
-            slot=params["slot"],
-            threshold_db=params.get("threshold_db"),
-            ratio=params.get("ratio"),
-            gain_db=params.get("gain_db"),
-            attack_ms=params.get("attack_ms"),
-            release_ms=params.get("release_ms"),
-            knee=params.get("knee"),
-        )
-
-        # Map of param_id → human-readable label, just for the readback report
-        from studiomind.plugins import fruity_compressor as fc
-        param_labels = {
-            fc.PARAM_THRESHOLD: "threshold",
-            fc.PARAM_RATIO: "ratio",
-            fc.PARAM_GAIN: "gain",
-            fc.PARAM_ATTACK: "attack",
-            fc.PARAM_RELEASE: "release",
-            fc.PARAM_TYPE: "knee",
-        }
-
-        # Tolerance for the FL-readback equality check. Plugins quantize
-        # parameter values internally, so the round-trip can drift by a
-        # tiny amount even on a successful write. Anything beyond this
-        # is a real rejection, not quantization noise.
-        WRITE_TOLERANCE = 1e-3
-
-        per_param: list[dict[str, Any]] = []
-        for cmd in commands:
-            requested = cmd["value"]
-            result = self._fl.set_plugin_param(
-                track_id=cmd["track_id"],
-                slot=cmd["slot"],
-                param_id=cmd["param_id"],
-                value=requested,
-            )
-            # Device script returns {"ok": ..., "param_id": ..., "new_value": ..., "display": ...}
-            # — new_value is plugins.getParamValue() called immediately after the write.
-            # If new_value == requested (within tolerance), the write took. If not, FL
-            # silently rejected it (or the wrapper's curve clamped to a no-op).
-            new_value = result.get("new_value")
-            label = param_labels.get(cmd["param_id"], f"param_{cmd['param_id']}")
-            took = (
-                isinstance(new_value, (int, float))
-                and abs(float(new_value) - float(requested)) <= WRITE_TOLERANCE
-            )
-            per_param.append({
-                "param": label,
-                "param_id": cmd["param_id"],
-                "requested_value": requested,
-                "new_value": new_value,
-                "display": result.get("display"),
-                "took": took,
-            })
-
-        succeeded = [p for p in per_param if p["took"]]
-        failed = [p for p in per_param if not p["took"]]
-
-        # Build a compact human description for the decision log
-        bits = []
-        if params.get("threshold_db") is not None:
-            bits.append(f"thresh {params['threshold_db']:+.1f}dB")
-        if params.get("ratio") is not None:
-            bits.append(f"ratio {params['ratio']:.1f}:1")
-        if params.get("attack_ms") is not None:
-            bits.append(f"attack {params['attack_ms']:.1f}ms")
-        if params.get("release_ms") is not None:
-            bits.append(f"release {params['release_ms']:.0f}ms")
-        if params.get("gain_db") is not None:
-            bits.append(f"gain {params['gain_db']:+.1f}dB")
-        if params.get("knee") is not None:
-            bits.append(f"knee {params['knee']}")
-        bits_str = ", ".join(bits) if bits else "no changes"
-        if failed:
-            bits_str += f" — {len(failed)} param(s) NOT accepted by FL"
-
-        self._log_decision(
-            tool="set_compressor",
-            params=params,
-            description=(
-                f"Fruity Compressor on track {params['track_id']} slot "
-                f"{params['slot']}: {bits_str}"
-            ),
-        )
-
-        return {
-            # ok = True only when every requested param actually moved in FL.
-            # The agent prompt should treat ok=False as a hard signal that the
-            # write didn't take and stop the user before claiming success.
-            "ok": len(failed) == 0,
-            "params_attempted": len(commands),
-            "params_accepted": len(succeeded),
-            "params_rejected": len(failed),
-            "per_param": per_param,
-            "threshold_db": params.get("threshold_db"),
-            "ratio": params.get("ratio"),
-            "gain_db": params.get("gain_db"),
-            "attack_ms": params.get("attack_ms"),
-            "release_ms": params.get("release_ms"),
-            "knee": params.get("knee"),
-        }
+    # set_proq3 + set_compressor used to live here as hand-written
+    # _exec_set_proq3 / _exec_set_compressor methods. As of P3-C they are
+    # provided by the FabFilter Pro-Q 3 and Fruity Compressor skills under
+    # src/studiomind/skills/ and dispatched through _exec_skill_tool.
 
     # Plugins on the target track that accept FL's wrapper-level sidechain
     # input. If any of these are loaded, the user can complete the sidechain

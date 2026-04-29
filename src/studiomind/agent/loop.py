@@ -15,11 +15,12 @@ from typing import Any, Callable
 
 from studiomind.agent.prompt import build_system_prompt
 from studiomind.agent.tools import (
-    DESTRUCTIVE_TOOLS,
-    TOOL_SCHEMAS,
     ToolExecutor,
+    build_tool_schemas,
+    compute_destructive_tools,
 )
 from studiomind.bridge.commands import FLStudio
+from studiomind.skills._registry import Skill, build_knowledge_section, load_all_skills
 from studiomind.workspace import WorkspaceSession
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,31 @@ class AgentLoop:
             )
         self._client = anthropic.Anthropic(api_key=api_key)
         self._stop_event = threading.Event()
-        self._executor = ToolExecutor(fl, workspace=workspace, stop_event=self._stop_event)
+
+        # Load every valid skill from src/studiomind/skills/. The mixing
+        # agent's tool list is built-in TOOL_SCHEMAS + each skill's TOOL,
+        # and its destructive-tools set folds in skills marked
+        # ``destructive: true`` in their manifest.
+        self._skills, skill_errors = load_all_skills()
+        if self._skills:
+            logger.info(
+                "Loaded %d skill(s): %s",
+                len(self._skills),
+                ", ".join(f"{s.tool_name}({s.name})" for s in self._skills),
+            )
+        for name, msg in skill_errors:
+            logger.error("Skill %s failed to load: %s", name, msg)
+
+        self._tool_schemas = build_tool_schemas(self._skills)
+        self._destructive_tools = compute_destructive_tools(self._skills)
+        self._knowledge_section = build_knowledge_section(self._skills)
+
+        self._executor = ToolExecutor(
+            fl,
+            workspace=workspace,
+            stop_event=self._stop_event,
+            skills=self._skills,
+        )
         self._action_log = ActionLog()
         self._last_text_response: str = ""  # set here so disconnect-before-first-run doesn't crash
 
@@ -320,6 +345,8 @@ class AgentLoop:
         self._stop_event.clear()
 
         system = build_system_prompt()
+        if self._knowledge_section:
+            system = f"{system}\n\n{self._knowledge_section}"
 
         if continue_conversation and hasattr(self, "_conversation_history"):
             self._conversation_history.append({"role": "user", "content": user_goal})
@@ -343,7 +370,7 @@ class AgentLoop:
 
         tools = [
             {"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]}
-            for t in TOOL_SCHEMAS
+            for t in self._tool_schemas
         ]
         if tools:
             tools[-1] = {**tools[-1], "cache_control": {"type": "ephemeral"}}
@@ -497,7 +524,7 @@ class AgentLoop:
         """Execute a single tool call with safety checks."""
 
         # Preview gate: ask user before destructive actions
-        if tool_name in DESTRUCTIVE_TOOLS and not self._config.auto_approve:
+        if tool_name in self._destructive_tools and not self._config.auto_approve:
             if self._config.on_tool_call:
                 approved = self._config.on_tool_call(tool_name, tool_input)
                 if not approved:

@@ -4,6 +4,7 @@
   "type": "plugin_wrapper",
   "display_name": "Fruity Compressor",
   "tool_name": "set_compressor",
+  "destructive": true,
   "fl_version": "21.2.10",
   "acquired": "2026-04-29T18:30:00+03:00",
   "calibration_log": null,
@@ -90,5 +91,5 @@
   ],
   "validation_probes": [],
   "origin": "pre-training-mode (calibrated by hand 2026-04-29 \u2014 Run A+B + ratio sweep)",
-  "content_hash": "sha256:6ae19b9423a1c7552f3b846c23391eab4a706e1bfe013579d6076a265df24269"
+  "content_hash": "sha256:c50667dada1d94d4c9402a99a41f143ae1a7f77595630435b8abb59f8593779b"
 }

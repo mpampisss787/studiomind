@@ -4,6 +4,7 @@
   "type": "plugin_wrapper",
   "display_name": "FabFilter Pro-Q 3",
   "tool_name": "set_proq3",
+  "destructive": true,
   "fl_version": "21.2.10",
   "acquired": "2026-04-23T00:00:00+03:00",
   "calibration_log": null,
@@ -118,5 +119,5 @@
   ],
   "validation_probes": [],
   "origin": "pre-training-mode (hand-written 2026-04-23)",
-  "content_hash": "sha256:979daaaea6e58b1ef028176458d7e3d43c32d17fab463f98089996c6bbc1a52b"
+  "content_hash": "sha256:ffab4376536ad657d6d6f0bcb91a79cc1ed2f7b591456f9b1bb6acae165d2ccc"
 }

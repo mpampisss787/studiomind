@@ -69,6 +69,7 @@ class Skill:
     knowledge: str
     skill_dir: Path
     content_hash_matched: bool
+    destructive: bool
 
 
 # ─────────────────── content hashing ───────────────────
@@ -130,6 +131,14 @@ def _validate_manifest(manifest: dict[str, Any], skill_dir: Path) -> None:
 
     if not isinstance(manifest["params"], list):
         raise SkillLoadError(f"{skill_dir.name}: params must be a list")
+
+    # `destructive` is optional in v1 manifests for forward compatibility with
+    # pre-P3-C fixtures. When present it must be a bool. Default applied at
+    # Skill-construction time (see load_skill) is True for plugin_wrapper.
+    if "destructive" in manifest and not isinstance(manifest["destructive"], bool):
+        raise SkillLoadError(
+            f"{skill_dir.name}: 'destructive' must be a bool when present"
+        )
 
 
 def _check_required_files(skill_dir: Path) -> None:
@@ -201,7 +210,15 @@ def load_skill(skill_dir: Path) -> Skill:
         knowledge=knowledge,
         skill_dir=skill_dir,
         content_hash_matched=hash_matched,
+        destructive=bool(manifest.get("destructive", _default_destructive(manifest["type"]))),
     )
+
+
+def _default_destructive(skill_type: str) -> bool:
+    """Skills that wrap a plugin write to FL state by definition; v1 has no
+    pure-read skills, so the default is destructive=True. v2 may add types
+    where this default flips."""
+    return skill_type == "plugin_wrapper"
 
 
 def discover_skill_dirs(skills_root: Path | None = None) -> list[Path]:
