@@ -349,6 +349,73 @@ def cmd_debug_bundle(args: argparse.Namespace) -> None:
     print("  git push")
 
 
+def cmd_install_device(args: argparse.Namespace) -> None:
+    """Deploy ``scripts/device_StudioMind.py`` into FL's Hardware folder.
+
+    Idempotent: matching hashes report "up to date" and exit 0.
+    Stale + ``--check`` exits 1 so CI / shell automation can gate on
+    it. Default (no flags) copies the bundled script into place.
+    """
+    from pathlib import Path
+    from studiomind import device_install
+    from studiomind.logging_setup import find_repo_root
+
+    repo_root = find_repo_root()
+    if repo_root is None:
+        print("ERROR: cannot locate the studiomind repo (editable install required)")
+        sys.exit(1)
+    bundled = repo_root / "scripts" / device_install.DEVICE_SCRIPT_NAME
+    target_dir = Path(args.target).expanduser() if args.target else None
+
+    try:
+        status = device_install.get_device_status(
+            bundled_script=bundled, target_dir=target_dir,
+        )
+    except device_install.DeviceInstallError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    if status.target_path is None:
+        print("ERROR: cannot locate FL's Hardware folder.")
+        print("  Pass --target with the full path, e.g.:")
+        print(r"    --target 'C:\Users\<you>\Documents\Image-Line\FL Studio\Settings\Hardware'")
+        sys.exit(1)
+
+    print(f"Bundled : {status.bundled_path}")
+    print(f"Deployed: {status.target_path}")
+    print(f"State   : {status.state}")
+    if status.bundled_hash:
+        print(f"  bundled  sha256: {status.bundled_hash[:16]}...")
+    if status.deployed_hash:
+        print(f"  deployed sha256: {status.deployed_hash[:16]}...")
+
+    if status.state == "up_to_date" and not args.force:
+        print()
+        print("[ok] Device script is already up to date. Nothing to do.")
+        return
+
+    if args.check:
+        print()
+        print(f"[stale] --check mode: not copying.")
+        print("Re-run without --check to install.")
+        sys.exit(1)
+
+    try:
+        new_status = device_install.install_device(
+            bundled_script=bundled, target_dir=target_dir, force=args.force,
+        )
+    except device_install.DeviceInstallError as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    print()
+    print(f"[installed] {new_status.target_path}")
+    print()
+    print("Now reload the script in FL:")
+    print("  F10 -> MIDI -> toggle the StudioMind controller row OFF and ON,")
+    print("  or restart FL Studio.")
+
+
 def cmd_train(args: argparse.Namespace) -> None:
     """Launch the training-mode wizard.
 
@@ -444,6 +511,21 @@ def cmd_train(args: argparse.Namespace) -> None:
         fl.disconnect()
 
 
+def _maybe_warn_stale_device_script() -> None:
+    """Run device_install.check_device_freshness() unless the user is
+    explicitly running install-device (which has its own status print)."""
+    # Cheap argv sniff — argparse hasn't run yet; we don't want the
+    # warning fighting with install-device's own preview output.
+    if any(a in ("install-device", "--help", "-h") for a in sys.argv[1:]):
+        return
+    try:
+        from studiomind import device_install
+        device_install.check_device_freshness()
+    except Exception:
+        # Boot-time hint is best-effort. Never block the CLI on it.
+        pass
+
+
 class _StdinReadbackProvider:
     """Tiny stdin-backed ReadbackProvider for CLI training. P5 swaps
     this for a websocket-driven future-based provider."""
@@ -459,6 +541,12 @@ class _StdinReadbackProvider:
 def main() -> None:
     # File logging on, always. CLI gets its session log automatically.
     configure_session_logging()
+
+    # Best-effort: warn if FL's deployed device script is stale. Silent
+    # when FL isn't installed or we're in a non-editable install. Skipped
+    # for install-device itself (which prints its own status) so the
+    # warning doesn't double-fire on the very command that fixes it.
+    _maybe_warn_stale_device_script()
 
     parser = argparse.ArgumentParser(description="StudioMind — AI producer for FL Studio")
     sub = parser.add_subparsers(dest="command")
@@ -524,6 +612,24 @@ def main() -> None:
         help="Bundle the last N log files (default: 1, the most recent)",
     )
 
+    # install-device — deploy device_StudioMind.py into FL's Hardware folder
+    install_parser = sub.add_parser(
+        "install-device",
+        help="Copy scripts/device_StudioMind.py into FL's Hardware folder",
+    )
+    install_parser.add_argument(
+        "--target", type=str, default=None,
+        help="FL Hardware folder path (default: auto-discover)",
+    )
+    install_parser.add_argument(
+        "--check", action="store_true",
+        help="Report status without copying (exit 0 if up-to-date, 1 otherwise)",
+    )
+    install_parser.add_argument(
+        "--force", action="store_true",
+        help="Re-copy even when hashes already match",
+    )
+
     # train — guided plugin acquisition (training mode)
     train_parser = sub.add_parser(
         "train",
@@ -579,6 +685,7 @@ def main() -> None:
         "shell": cmd_interactive,
         "debug-bundle": cmd_debug_bundle,
         "train": cmd_train,
+        "install-device": cmd_install_device,
     }
 
     commands[args.command](args)
