@@ -349,6 +349,113 @@ def cmd_debug_bundle(args: argparse.Namespace) -> None:
     print("  git push")
 
 
+def cmd_train(args: argparse.Namespace) -> None:
+    """Launch the training-mode wizard.
+
+    P4 ships the orchestrator + a stdin-driven readback provider; the
+    full Anthropic-driven loop and web UI come in P5. For now,
+    --dry-run is the recommended way to verify everything is wired
+    without touching FL.
+    """
+    from pathlib import Path
+    from studiomind.agent.learning_loop import (
+        TrainingOrchestrator,
+        resume_orchestrator,
+    )
+    from studiomind.learning import codegen as codegen_mod
+    from studiomind.learning import session_state as ss
+    from studiomind.learning.approval_tokens import ApprovalStore
+    from studiomind.learning.calibration import ReadbackProvider
+    from studiomind.logging_setup import find_repo_root
+
+    plugin_name: str = args.plugin_name
+    skill_name = args.skill_name or codegen_mod.default_skill_name(plugin_name)
+    tool_name = args.tool_name or codegen_mod.default_tool_name(plugin_name)
+
+    repo_root = find_repo_root()
+    if repo_root is None:
+        print("ERROR: cannot locate the studiomind repo (editable install?)")
+        sys.exit(1)
+
+    print(f"Training mode — acquiring '{plugin_name}'")
+    print(f"  skill_name = {skill_name}")
+    print(f"  tool_name  = {tool_name}")
+    print(f"  fl_version = {args.fl_version}")
+    print(f"  track={args.track} slot={args.slot}")
+    print(f"  repo_root  = {repo_root}")
+
+    if args.dry_run:
+        print()
+        print("Wizard plan:")
+        print("  1. enumerate_plugin_params(track, slot)")
+        print("  2. classify_param(id) for each enumerated param")
+        print("  3. sweep_param(id) for each continuous param (6 readbacks)")
+        print("  4. fit_param(id) — picks simplest curve with R² ≥ 0.99")
+        print("  5. validate_param(id) — 4 deterministic probes")
+        print("  6. codegen() + apply_writes(approval_token)")
+        print("  7. run_pytest() — must pass before commit")
+        print("  8. apply_commit(approval_token) — never pushes")
+        print()
+        print("--dry-run mode: nothing was written. Drop --dry-run when "
+              "FL is open with the plugin loaded.")
+        return
+
+    # ── Live mode below — needs an actual FL bridge ──
+    from studiomind.bridge.commands import FLStudio
+    fl = FLStudio()
+    fl.connect()
+    try:
+        provider = _StdinReadbackProvider()
+
+        if args.resume:
+            orch = resume_orchestrator(
+                fl=fl, repo_root=repo_root,
+                plugin_name=plugin_name, skill_name=skill_name,
+                tool_name=tool_name, fl_version=args.fl_version,
+                track_id=args.track, slot=args.slot,
+                readback_provider=provider,
+            )
+            if orch is None:
+                print("No in-flight session to resume.")
+                sys.exit(1)
+            print(f"Resumed at step '{orch.session.step}'.")
+        else:
+            if ss.load() is not None:
+                print("WARNING: ~/StudioMind/state/training-session.json exists. "
+                      "Pass --resume to continue, or `studiomind shell` and discard it.")
+                sys.exit(1)
+            orch = TrainingOrchestrator(
+                fl=fl, repo_root=repo_root,
+                plugin_name=plugin_name, skill_name=skill_name,
+                tool_name=tool_name, fl_version=args.fl_version,
+                track_id=args.track, slot=args.slot,
+                readback_provider=provider,
+                approval_store=ApprovalStore(),
+            )
+
+        # P4 ships the orchestrator + stdin provider; the full Anthropic-
+        # driven walk-through is P5. For now we tell the user to use the
+        # web UI (when shipped) or the shell to drive steps manually.
+        print()
+        print("[P4] CLI training is currently dry-run only — full agent flow "
+              "lands in P5 with the /training web UI. Run `studiomind train "
+              "<plugin> --track N --slot M --dry-run` to verify wiring.")
+    finally:
+        fl.disconnect()
+
+
+class _StdinReadbackProvider:
+    """Tiny stdin-backed ReadbackProvider for CLI training. P5 swaps
+    this for a websocket-driven future-based provider."""
+
+    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+        suffix = f" [{expected_unit}]" if expected_unit else ""
+        try:
+            return input(f"{prompt}{suffix} > ").strip()
+        except EOFError:
+            return ""
+
+
 def main() -> None:
     # File logging on, always. CLI gets its session log automatically.
     configure_session_logging()
@@ -417,6 +524,43 @@ def main() -> None:
         help="Bundle the last N log files (default: 1, the most recent)",
     )
 
+    # train — guided plugin acquisition (training mode)
+    train_parser = sub.add_parser(
+        "train",
+        help="Acquire a plugin wrapper through guided dialogue (training mode, P4)",
+    )
+    train_parser.add_argument(
+        "plugin_name", help="Display name of the plugin to acquire (e.g. 'Fruity Limiter')",
+    )
+    train_parser.add_argument(
+        "--track", type=int, required=True,
+        help="Mixer track index where the plugin is loaded",
+    )
+    train_parser.add_argument(
+        "--slot", type=int, required=True,
+        help="FX slot (0-9) where the plugin is loaded",
+    )
+    train_parser.add_argument(
+        "--fl-version", default="21.2.10",
+        help="FL Studio version for the manifest (default: 21.2.10)",
+    )
+    train_parser.add_argument(
+        "--skill-name",
+        help="Skill directory name (default: derived from plugin_name)",
+    )
+    train_parser.add_argument(
+        "--tool-name",
+        help="Mixing-agent tool name (default: 'set_<skill>'; drops 'fruity_' prefix)",
+    )
+    train_parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume an in-flight session at ~/StudioMind/state/training-session.json",
+    )
+    train_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate args + print the planned wizard; do not connect to FL",
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -434,6 +578,7 @@ def main() -> None:
         "web": cmd_web,
         "shell": cmd_interactive,
         "debug-bundle": cmd_debug_bundle,
+        "train": cmd_train,
     }
 
     commands[args.command](args)
