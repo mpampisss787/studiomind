@@ -33,26 +33,25 @@ def test_ratio_round_trip(ratio: float) -> None:
     assert fc.param_to_ratio(p) == pytest.approx(ratio, abs=1e-6)
 
 
-@pytest.mark.parametrize("db", [-20.0, -10.0, -3.0, 0.0, 3.0, 10.0, 20.0])
+@pytest.mark.parametrize("db", [-30.0, -20.0, -10.0, -3.0, 0.0, 3.0, 10.0, 20.0, 30.0])
 def test_gain_round_trip(db: float) -> None:
     p = fc.gain_to_param(db)
     assert 0.0 <= p <= 1.0
     assert fc.param_to_gain(p) == pytest.approx(db, abs=1e-6)
 
 
-@pytest.mark.parametrize("ms", [0.1, 1.0, 10.0, 50.0, 200.0, 1000.0])
+@pytest.mark.parametrize("ms", [0.0, 1.0, 10.0, 50.0, 200.0, 400.0])
 def test_attack_round_trip(ms: float) -> None:
     p = fc.attack_to_param(ms)
     assert 0.0 <= p <= 1.0
-    # Log-mapped, so allow tight relative tolerance
-    assert fc.param_to_attack(p) == pytest.approx(ms, rel=1e-6)
+    assert fc.param_to_attack(p) == pytest.approx(ms, abs=1e-6)
 
 
-@pytest.mark.parametrize("ms", [1.0, 50.0, 100.0, 500.0, 2000.0, 5000.0])
+@pytest.mark.parametrize("ms", [0.0, 50.0, 100.0, 500.0, 2000.0, 4000.0])
 def test_release_round_trip(ms: float) -> None:
     p = fc.release_to_param(ms)
     assert 0.0 <= p <= 1.0
-    assert fc.param_to_release(p) == pytest.approx(ms, rel=1e-6)
+    assert fc.param_to_release(p) == pytest.approx(ms, abs=1e-6)
 
 
 # ───────────────────────────── Anchor points ──────────────────────────
@@ -73,13 +72,34 @@ def test_ratio_unity_at_param_zero() -> None:
     assert fc.ratio_to_param(1.0) == pytest.approx(0.0, abs=1e-9)
 
 
-def test_attack_log_mapped_not_linear() -> None:
-    """A log mapping has the midpoint nowhere near the arithmetic mean."""
-    midpoint_ms = fc.param_to_attack(0.5)
-    arithmetic_mid = (fc.ATTACK_MIN_MS + fc.ATTACK_MAX_MS) / 2
-    geometric_mid = math.sqrt(fc.ATTACK_MIN_MS * fc.ATTACK_MAX_MS)
-    # Should be closer to geometric mean than arithmetic
-    assert abs(midpoint_ms - geometric_mid) < abs(midpoint_ms - arithmetic_mid)
+def test_attack_linear_against_live_readback() -> None:
+    """Live-FL readback (2026-04-29 calibration): param 0.5 -> 200 ms,
+    param 0.25 -> 100 ms. This is the linear [0, 400] ms curve."""
+    assert fc.param_to_attack(0.5) == pytest.approx(200.0, abs=1e-6)
+    assert fc.param_to_attack(0.25) == pytest.approx(100.0, abs=1e-6)
+
+
+def test_release_linear_against_live_readback() -> None:
+    """Live-FL readback (2026-04-29 calibration): param 0.5145 -> 2058 ms,
+    param 0.6221 -> 2489 ms. This is the linear [0, 4000] ms curve."""
+    assert fc.param_to_release(0.5145) == pytest.approx(2058.0, abs=1.0)
+    assert fc.param_to_release(0.6221) == pytest.approx(2488.0, abs=2.0)
+
+
+def test_gain_range_is_thirty_db_each_way() -> None:
+    """Live-FL readback (2026-04-29 calibration): param 0.5 -> 0 dB,
+    param 0.525 -> 1.5 dB. Slope = 60 dB per unit param ⇒ [-30, +30]."""
+    assert fc.param_to_gain(0.5) == pytest.approx(0.0, abs=1e-9)
+    assert fc.param_to_gain(0.525) == pytest.approx(1.5, abs=1e-6)
+    assert fc.param_to_gain(0.0) == pytest.approx(-30.0, abs=1e-9)
+    assert fc.param_to_gain(1.0) == pytest.approx(30.0, abs=1e-9)
+
+
+def test_ratio_quadratic_against_live_readback() -> None:
+    """Live-FL readback (2026-04-29 calibration): param 0.0526 -> 2.0:1,
+    param 0.3684 -> 11.3:1. Two-point quadratic fit r-1 = a*p + b*p^2."""
+    assert fc.param_to_ratio(0.0526) == pytest.approx(2.0, abs=0.05)
+    assert fc.param_to_ratio(0.3684) == pytest.approx(11.3, abs=0.1)
 
 
 # ───────────────────────────── Clamping ───────────────────────────────
@@ -106,12 +126,12 @@ def test_gain_clamps() -> None:
 
 
 def test_attack_clamps() -> None:
-    assert fc.attack_to_param(0.001) == 0.0
+    assert fc.attack_to_param(-10.0) == 0.0
     assert fc.attack_to_param(1e6) == 1.0
 
 
 def test_release_clamps() -> None:
-    assert fc.release_to_param(0.0001) == 0.0
+    assert fc.release_to_param(-10.0) == 0.0
     assert fc.release_to_param(1e9) == 1.0
 
 

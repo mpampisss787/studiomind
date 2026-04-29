@@ -13,25 +13,21 @@ session and committed to ``fruity_compressor_params.json``:
 
 All values are normalized 0.0-1.0 in the VST interface.
 
-CALIBRATION NOTE — the mappings below are best-effort approximations.
-FL Studio does not publish the exact normalized → human-units curves for
-its stock Fruity Compressor. The constants here were chosen so that:
+CALIBRATION (2026-04-29, two-point readback against live FL):
 
-  * ``threshold_to_param(0)`` rounds to 1.0 (the documented "no
-    compression" default).
-  * ``gain_to_param(0)`` is exactly 0.5 (the documented unity makeup).
-  * ``ratio_to_param(1.0)`` is exactly 0.0 (1:1 = no ratio).
-  * ``attack_to_param`` / ``release_to_param`` are logarithmic (matches
-    most DAW comp UIs).
-  * The defaults in ``fruity_compressor_params.json`` round-trip back to
-    plausible "factory default" human values (threshold 0 dB, gain 0 dB,
-    ratio ≈1.4:1, attack ≈1 ms, release ≈100 ms, hard knee).
-
-If a vertical-slice test shows the agent's predicted dynamic delta
-consistently off by more than ~1.5 dB on crest_factor, retune the
-constants here against a measurement sweep — pick three points per axis
-(min/mid/max), set them via ``set_plugin_param``, render, and read the
-resulting compression curve out of the rendered audio.
+  * THRESHOLD: linear [-60, 0] dB. Confirmed by Run A (-12 → -12.0) and
+    Run B (-30 → -30.0).
+  * GAIN: linear [-30, +30] dB, unity at param=0.5. Confirmed by Run B
+    (param 0.5 → 0.0 dB) and Run A's slope (param 0.525 → +1.5 dB).
+  * ATTACK: linear [0, 400] ms. Confirmed by Run A (param 0.5 → 200 ms)
+    and Run B (param 0.25 → 100 ms).
+  * RELEASE: linear [0, 4000] ms. Confirmed by Run A (param 0.5145 →
+    2058 ms) and Run B (param 0.6221 → 2489 ms).
+  * KNEE: hard at 0.0, smooth at 1.0. Confirmed.
+  * RATIO: NOT linear [1, 20]. Two points (param 0.0526 → 2.0:1, param
+    0.3684 → 11.3:1) confirm a non-linear curve. The current ratio
+    helpers fall back to a six-point curve fit committed in the
+    ratio sweep step (see scripts/sweep_compressor_ratio.py).
 """
 
 from __future__ import annotations
@@ -54,26 +50,25 @@ PARAM_ATTACK = 3
 PARAM_RELEASE = 4
 PARAM_TYPE = 5
 
-# Threshold range (linear in dB)
+# Threshold: linear in dB.
 THRESHOLD_MIN_DB = -60.0
 THRESHOLD_MAX_DB = 0.0
 
-# Ratio range (linear in ratio space — NOT compression-ratio-units, just
-# normalized [1.0, RATIO_MAX] linearly interpolated against [0.0, 1.0])
+# Gain: linear in dB. Unity (0 dB) lands at param=0.5.
+GAIN_MIN_DB = -30.0
+GAIN_MAX_DB = 30.0
+
+# Attack: linear in ms.
+ATTACK_MIN_MS = 0.0
+ATTACK_MAX_MS = 400.0
+
+# Release: linear in ms.
+RELEASE_MIN_MS = 0.0
+RELEASE_MAX_MS = 4000.0
+
+# Ratio: non-linear; fit lives in _RATIO_FIT below. Min ratio at param=0
+# is 1:1; max at param=1 depends on the fit (FL goes well past 20:1).
 RATIO_MIN = 1.0
-RATIO_MAX = 20.0
-
-# Gain range (linear in dB; 0 dB lands at param=0.5)
-GAIN_MIN_DB = -20.0
-GAIN_MAX_DB = 20.0
-
-# Attack range (logarithmic in ms)
-ATTACK_MIN_MS = 0.1
-ATTACK_MAX_MS = 1000.0
-
-# Release range (logarithmic in ms)
-RELEASE_MIN_MS = 1.0
-RELEASE_MAX_MS = 5000.0
 
 # Type (knee). Hard / Smooth are the two FL stock knee modes.
 KNEE_HARD = 0.0
@@ -101,15 +96,32 @@ def param_to_threshold(value: float) -> float:
     return THRESHOLD_MIN_DB + value * (THRESHOLD_MAX_DB - THRESHOLD_MIN_DB)
 
 
+# Provisional 2-point quadratic ratio fit (ratio - 1 = a*p + b*p^2):
+#   (param=0.0526, ratio=2.0)  and  (param=0.3684, ratio=11.3)
+# Replace with the 6-point fit from scripts/sweep_compressor_ratio.py once
+# that data is in.
+_RATIO_FIT_A = 17.52
+_RATIO_FIT_B = 28.33
+_RATIO_MAX_FROM_FIT = 1.0 + _RATIO_FIT_A + _RATIO_FIT_B  # ratio at param=1.0
+
+
 def ratio_to_param(ratio: float) -> float:
-    """Convert ratio (e.g. 4.0 for 4:1) to normalized parameter (0.0-1.0)."""
-    ratio = _clamp(ratio, RATIO_MIN, RATIO_MAX)
-    return (ratio - RATIO_MIN) / (RATIO_MAX - RATIO_MIN)
+    """Convert compression ratio (e.g. 4.0 for 4:1) to normalized parameter.
+
+    Uses the two-point quadratic fit; invert by solving b*p^2 + a*p - (r-1) = 0.
+    """
+    ratio = _clamp(ratio, RATIO_MIN, _RATIO_MAX_FROM_FIT)
+    if ratio <= RATIO_MIN:
+        return 0.0
+    # b*p^2 + a*p - (ratio-1) = 0  →  p = (-a + sqrt(a^2 + 4*b*(ratio-1))) / (2b)
+    disc = _RATIO_FIT_A ** 2 + 4.0 * _RATIO_FIT_B * (ratio - RATIO_MIN)
+    return _clamp((-_RATIO_FIT_A + math.sqrt(disc)) / (2.0 * _RATIO_FIT_B), 0.0, 1.0)
 
 
 def param_to_ratio(value: float) -> float:
-    """Convert normalized parameter to compression ratio (1:1 → 20:1)."""
-    return RATIO_MIN + value * (RATIO_MAX - RATIO_MIN)
+    """Convert normalized parameter to compression ratio."""
+    value = _clamp(value, 0.0, 1.0)
+    return RATIO_MIN + _RATIO_FIT_A * value + _RATIO_FIT_B * value * value
 
 
 def gain_to_param(db: float) -> float:
@@ -124,25 +136,25 @@ def param_to_gain(value: float) -> float:
 
 
 def attack_to_param(ms: float) -> float:
-    """Convert attack time in ms to normalized parameter (logarithmic)."""
+    """Convert attack time in ms to normalized parameter (linear)."""
     ms = _clamp(ms, ATTACK_MIN_MS, ATTACK_MAX_MS)
-    return math.log(ms / ATTACK_MIN_MS) / math.log(ATTACK_MAX_MS / ATTACK_MIN_MS)
+    return (ms - ATTACK_MIN_MS) / (ATTACK_MAX_MS - ATTACK_MIN_MS)
 
 
 def param_to_attack(value: float) -> float:
     """Convert normalized parameter to attack time in ms."""
-    return ATTACK_MIN_MS * ((ATTACK_MAX_MS / ATTACK_MIN_MS) ** value)
+    return ATTACK_MIN_MS + value * (ATTACK_MAX_MS - ATTACK_MIN_MS)
 
 
 def release_to_param(ms: float) -> float:
-    """Convert release time in ms to normalized parameter (logarithmic)."""
+    """Convert release time in ms to normalized parameter (linear)."""
     ms = _clamp(ms, RELEASE_MIN_MS, RELEASE_MAX_MS)
-    return math.log(ms / RELEASE_MIN_MS) / math.log(RELEASE_MAX_MS / RELEASE_MIN_MS)
+    return (ms - RELEASE_MIN_MS) / (RELEASE_MAX_MS - RELEASE_MIN_MS)
 
 
 def param_to_release(value: float) -> float:
     """Convert normalized parameter to release time in ms."""
-    return RELEASE_MIN_MS * ((RELEASE_MAX_MS / RELEASE_MIN_MS) ** value)
+    return RELEASE_MIN_MS + value * (RELEASE_MAX_MS - RELEASE_MIN_MS)
 
 
 def knee_to_param(knee: str) -> float:
