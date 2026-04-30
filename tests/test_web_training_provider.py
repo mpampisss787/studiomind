@@ -142,6 +142,66 @@ def test_request_timeout_returns_empty(loop_thread: _LoopThread) -> None:
     assert 0.08 <= elapsed <= 1.5
 
 
+def test_request_with_context_emits_structured_event(loop_thread: _LoopThread) -> None:
+    """When a ReadbackContext is supplied, the request_readback event
+    carries a structured `context` dict the UI can render as a richer
+    prompt."""
+    from studiomind.learning.calibration import ReadbackContext
+    sent: list[dict] = []
+
+    async def send_event(event):
+        sent.append(event)
+
+    provider = WsReadbackProvider(send_event, loop_thread.loop, timeout=2.0)
+
+    def agent_thread() -> None:
+        ctx = ReadbackContext(
+            phase="sweep", param_id=2, param_name="Mix",
+            step="4/6", param_value=0.6, expected_unit="%",
+        )
+        provider.request("Sweep Mix step 0.60", expected_unit="%", context=ctx)
+
+    t = threading.Thread(target=agent_thread)
+    t.start()
+
+    for _ in range(100):
+        if sent: break
+        time.sleep(0.01)
+
+    provider.submit("60.0 %")
+    t.join(timeout=2.0)
+
+    assert sent[0]["type"] == "request_readback"
+    assert "context" in sent[0]
+    ctx = sent[0]["context"]
+    assert ctx["phase"] == "sweep"
+    assert ctx["param_id"] == 2
+    assert ctx["param_name"] == "Mix"
+    assert ctx["step"] == "4/6"
+    assert abs(ctx["param_value"] - 0.6) < 1e-9
+    assert ctx["expected_unit"] == "%"
+
+
+def test_request_without_context_omits_field(loop_thread: _LoopThread) -> None:
+    """If the caller doesn't pass a context, the WS event has no
+    `context` key — UI falls back to the raw prompt string."""
+    sent: list[dict] = []
+    async def send_event(event): sent.append(event)
+    provider = WsReadbackProvider(send_event, loop_thread.loop, timeout=2.0)
+
+    def agent_thread() -> None:
+        provider.request("Plain prompt")
+
+    t = threading.Thread(target=agent_thread)
+    t.start()
+    for _ in range(100):
+        if sent: break
+        time.sleep(0.01)
+    provider.submit("x")
+    t.join(timeout=2.0)
+    assert "context" not in sent[0]
+
+
 def test_sequential_requests_each_get_their_own_value(loop_thread: _LoopThread) -> None:
     """The wizard makes one request at a time; each one should get
     exactly its own readback value."""

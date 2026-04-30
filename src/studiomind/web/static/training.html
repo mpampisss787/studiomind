@@ -653,7 +653,7 @@
       messages.scrollTop = messages.scrollHeight;
     }
 
-    function appendReadbackPrompt(prompt, expectedUnit) {
+    function appendReadbackPrompt(prompt, expectedUnit, context) {
       // Remove any previous waiting prompt.
       if (activeReadbackEl && activeReadbackEl.parentNode) {
         activeReadbackEl.remove();
@@ -661,9 +661,30 @@
       }
       const el = document.createElement('div');
       el.className = 'readback-prompt';
+
+      // If structured context is present, render a richer header.
+      // Falls back to the raw prompt string when context is missing.
+      let header = '';
+      if (context && context.phase) {
+        const phaseLabel = {
+          classify: 'Classifying',
+          sweep:    'Sweeping',
+          validate: 'Validating',
+        }[context.phase] || context.phase;
+        const name = context.param_name || `param ${context.param_id}`;
+        const stepStr = context.step ? ` step ${context.step}` : '';
+        const valStr = (typeof context.param_value === 'number')
+          ? ` (param=${context.param_value.toFixed(2)})`
+          : '';
+        header = `<div class="prompt-text"><strong>${escapeHtml(phaseLabel)}</strong> ${escapeHtml(name)}${escapeHtml(stepStr)}${escapeHtml(valStr)}</div>`;
+      } else {
+        header = `<div class="prompt-text">${escapeHtml(prompt)}</div>`;
+      }
+
+      const unit = expectedUnit || (context && context.expected_unit) || '';
       el.innerHTML = `
-        <div class="prompt-text">${escapeHtml(prompt)}</div>
-        <div class="prompt-hint">${expectedUnit ? `Expected unit: <strong>${escapeHtml(expectedUnit)}</strong> &middot; ` : ''}Right-click the FL knob &rarr; Edit value, then type the number here.</div>
+        ${header}
+        <div class="prompt-hint">${unit ? `Expected unit: <strong>${escapeHtml(unit)}</strong> &middot; ` : ''}Right-click the FL knob &rarr; Edit value, then type the number here.</div>
         <div class="input-row">
           <input class="rb-input" placeholder="e.g. -12.5 dB" autofocus>
           <button class="primary rb-submit">Submit</button>
@@ -838,7 +859,7 @@
           updateParamFromTool(msg.tool, msg.result);
           break;
         case 'request_readback':
-          appendReadbackPrompt(msg.prompt, msg.expected_unit);
+          appendReadbackPrompt(msg.prompt, msg.expected_unit, msg.context);
           break;
         case 'proposed_writes':
           appendWritesPreview(msg.token, msg.payload || []);

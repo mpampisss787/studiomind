@@ -527,10 +527,18 @@ def _maybe_warn_stale_device_script() -> None:
 
 
 class _StdinReadbackProvider:
-    """Tiny stdin-backed ReadbackProvider for CLI training. P5 swaps
-    this for a websocket-driven future-based provider."""
+    """Tiny stdin-backed ReadbackProvider for CLI training. The web UI
+    uses a websocket-future-backed provider (web/training_provider.py).
+    Both accept the optional ``context`` kwarg per the protocol; this
+    one ignores it — the structured fields are only useful for a UI."""
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(
+        self,
+        prompt: str,
+        *,
+        expected_unit: str = "",
+        context: object = None,
+    ) -> str:
         suffix = f" [{expected_unit}]" if expected_unit else ""
         try:
             return input(f"{prompt}{suffix} > ").strip()

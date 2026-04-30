@@ -393,6 +393,106 @@ def test_ws_training_rejects_first_message_other_than_start(
         assert "start" in event["content"].lower()
 
 
+def test_ws_training_request_readback_carries_context(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Live wizard turn confirms the orchestrator → WsReadbackProvider →
+    WS event chain forwards the structured ReadbackContext: every
+    request_readback event during sweep/classify/validate carries
+    phase, param_id, param_name, step, param_value, expected_unit."""
+    from studiomind.web import app as app_module
+
+    monkeypatch.setattr(app_module, "get_anthropic_key", lambda: "sk-test-fake")
+    from studiomind import logging_setup
+    monkeypatch.setattr(logging_setup, "find_repo_root", lambda: repo_root)
+
+    def fake_build_fl():
+        return FakeFL()
+    monkeypatch.setattr(app_module, "_build_training_fl", fake_build_fl)
+
+    scripted = _make_scripted_client()
+    def fake_build_agent(orch, *, on_message, on_tool_call,
+                        on_tool_result, on_step):
+        from studiomind.agent.learning_loop import (
+            TrainingAgent, TrainingAgentConfig,
+        )
+        return TrainingAgent(
+            orch,
+            config=TrainingAgentConfig(
+                model="claude-mock", max_turns=80,
+                on_message=on_message, on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result, on_step=on_step,
+            ),
+            anthropic_client=scripted,
+        )
+    monkeypatch.setattr(app_module, "_build_training_agent", fake_build_agent)
+
+    client = TestClient(app_module.app)
+    app_module._set_active_training(None)
+
+    readbacks = (
+        CLASSIFY_THRESHOLD + CLASSIFY_STYLE + CLASSIFY_MIX
+        + SWEEP_THRESHOLD + SWEEP_MIX
+        + VAL_THRESHOLD + VAL_MIX
+    )
+    rb = list(readbacks)
+    request_events: list[dict] = []
+
+    with client.websocket_connect("/ws/training") as ws:
+        ws.send_json({
+            "type": "start",
+            "plugin_name": "Demo Plugin",
+            "skill_name": "demo_plugin",
+            "tool_name": "set_demo",
+            "fl_version": "21.2.10",
+            "track_id": 4,
+            "slot": 0,
+        })
+        while True:
+            ev = ws.receive_json()
+            t = ev.get("type")
+            if t == "request_readback":
+                request_events.append(ev)
+                ws.send_json({"type": "readback", "value": rb.pop(0)})
+            elif t == "proposed_writes":
+                ws.send_json({"type": "approve", "action": "writes", "token": ev["token"]})
+            elif t == "proposed_commit":
+                ws.send_json({"type": "approve", "action": "commit", "token": ev["token"]})
+            elif t == "done":
+                break
+            elif t == "error":
+                pytest.fail(f"Unexpected error: {ev}")
+
+    # Every readback event must have a structured context.
+    assert request_events, "no readback prompts surfaced"
+    for ev in request_events:
+        assert "context" in ev, f"missing context: {ev}"
+        c = ev["context"]
+        assert c["phase"] in ("classify", "sweep", "validate")
+        assert isinstance(c["param_id"], int)
+        assert c["param_name"] in ("Threshold", "Style", "Mix")
+        assert c["step"]  # non-empty
+
+    # Three classify probes (2 each) = 6 events; two 6-step sweeps = 12;
+    # two 4-probe validations = 8. Total 26.
+    classify_evs = [e for e in request_events if e["context"]["phase"] == "classify"]
+    sweep_evs = [e for e in request_events if e["context"]["phase"] == "sweep"]
+    validate_evs = [e for e in request_events if e["context"]["phase"] == "validate"]
+    assert len(classify_evs) == 6
+    assert len(sweep_evs) == 12
+    assert len(validate_evs) == 8
+
+    # Sweep steps go 1/6 through 6/6 for each of the two continuous params.
+    sweep_steps = [e["context"]["step"] for e in sweep_evs]
+    assert sweep_steps.count("1/6") == 2
+    assert sweep_steps.count("6/6") == 2
+
+    # Param names line up with the FakeFL plugin's labels.
+    assert any(e["context"]["param_name"] == "Threshold" for e in sweep_evs)
+    assert any(e["context"]["param_name"] == "Mix" for e in sweep_evs)
+    assert any(e["context"]["param_name"] == "Style" for e in classify_evs)
+
+
 def test_ws_training_streams_param_id_in_tool_results(
     repo_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

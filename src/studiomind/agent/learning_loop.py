@@ -135,13 +135,14 @@ class TrainingOrchestrator:
         """Drive the two probe values, ask user, decide kind."""
         self.session.set_step("classifying")
         self._persist()
+        rec = self.session.get_param(param_id)
         result = cal.classify_param(
             self.fl, self.track_id, self.slot, param_id,
             provider=self.readback_provider,
+            param_name=rec.name if rec else "",
             dwell_s=self.dwell_s,
             sleep=self.sleep,
         )
-        rec = self.session.get_param(param_id)
         if rec is None:
             raise TrainingError(f"classify_param: unknown param_id {param_id}")
         if result.kind in ("continuous", "enum"):
@@ -203,6 +204,7 @@ class TrainingOrchestrator:
         sweep = cal.run_sweep(
             self.fl, self.track_id, self.slot, param_id,
             provider=self.readback_provider,
+            param_name=rec.name,
             points=points,
             dwell_s=self.dwell_s,
             sleep=self.sleep,
@@ -276,6 +278,7 @@ class TrainingOrchestrator:
             self.fl, self.track_id, self.slot, param_id,
             fit=fit, runner_up=runner_up,
             provider=self.readback_provider,
+            param_name=rec.name,
             tolerance_abs=tolerance_abs,
             tolerance_rel=tolerance_rel,
             dwell_s=self.dwell_s,

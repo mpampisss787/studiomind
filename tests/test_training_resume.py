@@ -48,7 +48,7 @@ class CannedProvider:
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(self, prompt: str, *, expected_unit: str = "", context: object = None) -> str:
         if not self.responses:
             raise RuntimeError("CannedProvider exhausted")
         return self.responses.pop(0)

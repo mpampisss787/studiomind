@@ -50,7 +50,7 @@ class CannedProvider:
         self._responses = list(responses)
         self.prompts: list[str] = []
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(self, prompt: str, *, expected_unit: str = "", context: object = None) -> str:
         self.prompts.append(prompt)
         if not self._responses:
             raise RuntimeError("CannedProvider exhausted")

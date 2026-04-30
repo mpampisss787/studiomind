@@ -63,12 +63,23 @@ class WsReadbackProvider:
 
     # ───────────────────────────── ReadbackProvider ───────────────────
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(
+        self,
+        prompt: str,
+        *,
+        expected_unit: str = "",
+        context: Any = None,
+    ) -> str:
         """Block the agent thread until the UI submits a readback.
 
         Returns the empty string on cancel or timeout — the calibration
         layer treats an unparseable readback as actionable feedback the
         agent can surface back to the user, not a hard error.
+
+        ``context`` (optional ``ReadbackContext``) is forwarded to the
+        UI as a structured ``context`` dict so the wizard can render
+        a richer prompt (param name, step, phase) instead of the raw
+        prompt string.
         """
         with self._lock:
             if self._cancelled:
@@ -81,6 +92,20 @@ class WsReadbackProvider:
             "prompt": prompt,
             "expected_unit": expected_unit,
         }
+        if context is not None:
+            try:
+                event["context"] = {
+                    "phase": context.phase,
+                    "param_id": context.param_id,
+                    "param_name": context.param_name,
+                    "step": context.step,
+                    "param_value": context.param_value,
+                    "expected_unit": context.expected_unit,
+                }
+            except AttributeError:
+                # Unknown context shape — silently drop the structured
+                # half; the prompt string is still the source of truth.
+                pass
         try:
             asyncio.run_coroutine_threadsafe(self._send_event(event), self._loop)
         except RuntimeError as e:

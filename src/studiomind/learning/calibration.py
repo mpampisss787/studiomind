@@ -61,6 +61,25 @@ class ClassificationResult:
 
 
 @dataclass(frozen=True)
+class ReadbackContext:
+    """Structured metadata for a readback prompt.
+
+    Providers that surface readbacks to a UI (the websocket provider)
+    use these fields to render a richer prompt — e.g. "Sweeping
+    THRESHOLD step 4/6 (param=0.60)" — instead of the raw prompt
+    string. CLI / canned providers ignore the context entirely; the
+    field on the protocol has a default of None so existing impls
+    don't break.
+    """
+    phase: str            # "classify" | "sweep" | "validate"
+    param_id: int
+    param_name: str = ""
+    step: str = ""        # "4/6" or "1/2"
+    param_value: float = 0.0
+    expected_unit: str = ""
+
+
+@dataclass(frozen=True)
 class ValidationProbeResult:
     param_value: float
     predicted: float
@@ -83,9 +102,19 @@ class ReadbackProvider(Protocol):
       * stdin in a CLI subcommand
       * /ws/training in the web UI (P5)
       * canned-list in tests
+
+    The ``context`` kwarg is optional structured metadata about the
+    prompt — providers that surface readbacks to a UI can render a
+    richer prompt from it. CLI / canned providers ignore it.
     """
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(
+        self,
+        prompt: str,
+        *,
+        expected_unit: str = "",
+        context: "ReadbackContext | None" = None,
+    ) -> str:
         ...
 
 
@@ -169,9 +198,18 @@ def request_user_readback(
     *,
     prompt: str,
     expected_unit: str = "",
+    context: ReadbackContext | None = None,
 ) -> Readback:
-    """Ask the user via the provider, parse the response."""
-    raw = provider.request(prompt, expected_unit=expected_unit)
+    """Ask the user via the provider, parse the response.
+
+    ``context`` is forwarded as a kwarg; providers that don't accept
+    it (older custom impls) fall back transparently.
+    """
+    try:
+        raw = provider.request(prompt, expected_unit=expected_unit, context=context)
+    except TypeError:
+        # Provider's request() doesn't accept context= — call without.
+        raw = provider.request(prompt, expected_unit=expected_unit)
     return Readback(raw=raw, parsed=parse_readback(raw))
 
 
@@ -187,6 +225,7 @@ def classify_param(
     param_id: int,
     *,
     provider: ReadbackProvider,
+    param_name: str = "",
     dwell_s: float = 0.5,
     test_values: tuple[float, float] = CLASSIFY_TEST_VALUES,
     sleep: Callable[[float], None] = time.sleep,
@@ -203,14 +242,25 @@ def classify_param(
         the param probably doesn't move on this stride.
     """
     pa, pb = test_values
+    label = param_name or f"param {param_id}"
     set_param_and_dwell(fl, track_id, slot, param_id, pa, dwell_s=dwell_s, sleep=sleep)
-    a = request_user_readback(provider, prompt=(
-        f"Probing param {param_id} at value {pa:.2f}. What does FL display?"
-    ))
+    a = request_user_readback(
+        provider,
+        prompt=f"Probing {label} at value {pa:.2f}. What does FL display?",
+        context=ReadbackContext(
+            phase="classify", param_id=param_id, param_name=param_name,
+            step="1/2", param_value=pa,
+        ),
+    )
     set_param_and_dwell(fl, track_id, slot, param_id, pb, dwell_s=dwell_s, sleep=sleep)
-    b = request_user_readback(provider, prompt=(
-        f"Probing param {param_id} at value {pb:.2f}. What does FL display?"
-    ))
+    b = request_user_readback(
+        provider,
+        prompt=f"Probing {label} at value {pb:.2f}. What does FL display?",
+        context=ReadbackContext(
+            phase="classify", param_id=param_id, param_name=param_name,
+            step="2/2", param_value=pb,
+        ),
+    )
 
     if a.parsed is not None and b.parsed is not None:
         denom = max(abs(a.parsed) + abs(b.parsed), 1e-9)
@@ -251,6 +301,7 @@ def run_sweep(
     param_id: int,
     *,
     provider: ReadbackProvider,
+    param_name: str = "",
     points: Sequence[float] = DEFAULT_SWEEP_POINTS,
     dwell_s: float = 0.5,
     expected_unit: str = "",
@@ -259,12 +310,18 @@ def run_sweep(
     """Drive each point in ``points``, ask for a readback, return the
     list as ``(param_value, Readback)`` pairs."""
     out: list[tuple[float, Readback]] = []
-    for p in points:
+    label = param_name or f"param {param_id}"
+    n = len(points)
+    for i, p in enumerate(points, start=1):
         set_param_and_dwell(fl, track_id, slot, param_id, p, dwell_s=dwell_s, sleep=sleep)
         r = request_user_readback(
             provider,
-            prompt=f"Sweep param {param_id}, step {p:.2f}. What does FL display?",
+            prompt=f"Sweep {label}, step {p:.2f}. What does FL display?",
             expected_unit=expected_unit,
+            context=ReadbackContext(
+                phase="sweep", param_id=param_id, param_name=param_name,
+                step=f"{i}/{n}", param_value=p, expected_unit=expected_unit,
+            ),
         )
         out.append((p, r))
     return out
@@ -344,6 +401,7 @@ def validate_fit(
     fit: Fit,
     runner_up: Fit | None = None,
     provider: ReadbackProvider,
+    param_name: str = "",
     tolerance_abs: float = 0.5,
     tolerance_rel: float = 0.01,
     dwell_s: float = 0.5,
@@ -360,11 +418,17 @@ def validate_fit(
     points = list(probe_points) if probe_points else select_validation_probes(fit, runner_up)
     probes: list[ValidationProbeResult] = []
     all_ok = True
-    for p in points:
+    label = param_name or f"param {param_id}"
+    n = len(points)
+    for i, p in enumerate(points, start=1):
         set_param_and_dwell(fl, track_id, slot, param_id, p, dwell_s=dwell_s, sleep=sleep)
         readback = request_user_readback(
             provider,
-            prompt=f"Validation probe param {param_id} at {p:.3f}. What does FL display?",
+            prompt=f"Validation probe {label} at {p:.3f}. What does FL display?",
+            context=ReadbackContext(
+                phase="validate", param_id=param_id, param_name=param_name,
+                step=f"{i}/{n}", param_value=p,
+            ),
         )
         predicted = predict(fit, p)
         actual = readback.parsed

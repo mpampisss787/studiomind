@@ -63,7 +63,7 @@ class CannedProvider:
         self.responses = list(responses)
         self.consumed: list[tuple[str, str]] = []
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(self, prompt: str, *, expected_unit: str = "", context: object = None) -> str:
         if not self.responses:
             raise RuntimeError(
                 f"CannedProvider exhausted at prompt: {prompt!r} "
