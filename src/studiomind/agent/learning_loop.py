@@ -400,7 +400,18 @@ class TrainingOrchestrator:
     def request_writes_approval(self) -> str:
         return code_edit.request_writes_approval(self.write_queue, self.approval_store)
 
-    def apply_writes(self, *, token: str) -> list[Path]:
+    def apply_writes(self, *, token: str, wait_timeout: float | None = 600.0) -> list[Path]:
+        """Block until the UI approves (or rejects) the token, then
+        flush the queue. Raises ``ApprovalError`` on rejection /
+        timeout / expiry — the agent treats those as "abort this
+        acquisition, don't ship a half-written skill"."""
+        from studiomind.learning.approval_tokens import ApprovalError
+        outcome = self.approval_store.wait_for_approval(token, timeout=wait_timeout)
+        if outcome != "approved":
+            raise ApprovalError(
+                f"Writes were not approved (state: {outcome!r}). "
+                "Agent should abort or surface the rejection to the user."
+            )
         written = code_edit.apply_proposed_writes(
             self.write_queue, token=token, approval_store=self.approval_store,
         )
@@ -480,7 +491,16 @@ class TrainingOrchestrator:
         *,
         token: str,
         runner: Any | None = None,
+        wait_timeout: float | None = 600.0,
     ) -> str:
+        """Block until the UI approves the commit, then commit. Same
+        rejection semantics as ``apply_writes``."""
+        from studiomind.learning.approval_tokens import ApprovalError
+        outcome = self.approval_store.wait_for_approval(token, timeout=wait_timeout)
+        if outcome != "approved":
+            raise ApprovalError(
+                f"Commit was not approved (state: {outcome!r})."
+            )
         sha = code_edit.apply_commit(
             proposal, token=token,
             approval_store=self.approval_store,
@@ -545,11 +565,27 @@ def resume_orchestrator(
 
 @dataclass
 class TrainingAgentConfig:
-    """Configuration for the LLM-driven training loop."""
+    """Configuration for the LLM-driven training loop.
+
+    The optional callbacks let the web UI stream activity to the
+    browser without coupling the agent loop to FastAPI:
+      * ``on_message``        — assistant text response
+      * ``on_tool_call``      — tool name + input dict, before dispatch
+      * ``on_tool_result``    — tool name + result dict, after dispatch
+      * ``on_step``           — orchestrator step transition (e.g.
+        "enumerated", "sweeping"). Called whenever ``session.step``
+        changes between turns.
+    Callbacks are invoked from the agent's executor thread; UI code
+    must marshal back to its event loop (e.g. with
+    ``asyncio.run_coroutine_threadsafe``).
+    """
     model: str = "claude-opus-4-7"
     max_turns: int = 60
     max_tokens: int = 4096
     on_message: Callable[[str], None] | None = None
+    on_tool_call: Callable[[str, dict[str, Any]], None] | None = None
+    on_tool_result: Callable[[str, dict[str, Any]], None] | None = None
+    on_step: Callable[[str], None] | None = None
 
 
 class TrainingAgent:
@@ -724,13 +760,31 @@ class TrainingAgent:
         """Run one tool, serialize the result. Errors come back as a
         tool_result with is_error=True so the agent can decide to retry
         or abort instead of crashing the loop."""
+        tool_input = dict(tool_use_block.input or {})
+        prev_step = self._orch.session.step
+        if self._config.on_tool_call:
+            try:
+                self._config.on_tool_call(tool_use_block.name, tool_input)
+            except Exception:  # pragma: no cover — UI hook errors must not kill the agent
+                log.exception("on_tool_call hook raised")
         try:
             result = dispatch(
                 self._orch,
                 tool_use_block.name,
-                dict(tool_use_block.input or {}),
+                tool_input,
                 state=self._dispatch_state,
             )
+            if self._config.on_tool_result:
+                try:
+                    self._config.on_tool_result(tool_use_block.name, result)
+                except Exception:  # pragma: no cover
+                    log.exception("on_tool_result hook raised")
+            new_step = self._orch.session.step
+            if new_step != prev_step and self._config.on_step:
+                try:
+                    self._config.on_step(new_step)
+                except Exception:  # pragma: no cover
+                    log.exception("on_step hook raised")
             return {
                 "type": "tool_result",
                 "tool_use_id": tool_use_block.id,
@@ -738,9 +792,15 @@ class TrainingAgent:
             }
         except Exception as e:
             log.exception("Training tool %s failed", tool_use_block.name)
+            err = {"error": str(e), "type": type(e).__name__}
+            if self._config.on_tool_result:
+                try:
+                    self._config.on_tool_result(tool_use_block.name, err)
+                except Exception:  # pragma: no cover
+                    log.exception("on_tool_result hook raised on error path")
             return {
                 "type": "tool_result",
                 "tool_use_id": tool_use_block.id,
-                "content": json.dumps({"error": str(e), "type": type(e).__name__}),
+                "content": json.dumps(err),
                 "is_error": True,
             }

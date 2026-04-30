@@ -909,6 +909,399 @@ async def websocket_chat(ws: WebSocket):
             pass
 
 
+# ───────────────────────── Training mode ──────────────────────────
+#
+# /training serves the wizard UI; /ws/training is the live websocket
+# that drives the TrainingAgent. The flow:
+#
+#   UI sends {type: "start", plugin_name, track_id, slot, ...}.
+#   Server acquires the training mode lock, builds the orchestrator +
+#   WsReadbackProvider + TrainingAgent, registers the active session
+#   handle (so /api/training/approve can find the ApprovalStore), and
+#   runs the agent in a thread-pool executor. Per-turn tool activity
+#   streams back as JSON events (assistant text, tool_call, tool_result,
+#   request_readback, proposed_writes, proposed_commit, step, done,
+#   error). The UI POSTs readback values, approve, reject as
+#   separate WS messages or REST calls — see the `_recv_loop` below.
+
+# Factories — unit tests monkeypatch these to inject fakes (FL bridge
+# without real MIDI; TrainingAgent with a scripted Anthropic client).
+def _build_training_fl():
+    """Build + connect the FL bridge for a training session.
+    Override in tests to inject a fake."""
+    from studiomind.bridge.commands import FLStudio
+    fl = FLStudio()
+    fl.connect()
+    return fl
+
+
+def _build_training_orchestrator(*, fl, repo_root, plugin_name, skill_name,
+                                 tool_name, fl_version, track_id, slot,
+                                 readback_provider, approval_store,
+                                 session_path):
+    from studiomind.agent.learning_loop import TrainingOrchestrator
+    return TrainingOrchestrator(
+        fl=fl, repo_root=repo_root,
+        plugin_name=plugin_name, skill_name=skill_name,
+        tool_name=tool_name, fl_version=fl_version,
+        track_id=track_id, slot=slot,
+        readback_provider=readback_provider,
+        approval_store=approval_store,
+        session_path=session_path,
+    )
+
+
+def _build_training_agent(orch, *, on_message, on_tool_call,
+                          on_tool_result, on_step):
+    from studiomind.agent.learning_loop import TrainingAgent, TrainingAgentConfig
+    return TrainingAgent(
+        orch,
+        config=TrainingAgentConfig(
+            on_message=on_message,
+            on_tool_call=on_tool_call,
+            on_tool_result=on_tool_result,
+            on_step=on_step,
+        ),
+    )
+
+
+@app.get("/training")
+async def training_index():
+    return FileResponse(str(STATIC_DIR / "training.html"))
+
+
+@app.websocket("/ws/training")
+async def websocket_training(ws: WebSocket):
+    """WebSocket driving a TrainingAgent through one plugin acquisition.
+
+    Connection lifecycle:
+      1. Accept; expect a single ``{type:"start", ...}`` message with
+         the plugin / track / slot / fl_version.
+      2. Acquire training mode lock; bail with `error` if held.
+      3. Build orchestrator + provider + agent; register the active
+         session handle for /api/training/approve.
+      4. Run the agent in a thread-pool executor; stream every
+         on_message / on_tool_call / on_tool_result / on_step event
+         back over the socket. ``request_writes_approval`` and
+         ``request_commit_approval`` tool results are upgraded to
+         ``proposed_writes`` / ``proposed_commit`` events so the UI
+         can render the diff + Approve/Reject buttons immediately.
+      5. Forward UI messages: ``readback`` → provider.submit;
+         ``stop`` → agent.request_stop; ``reject`` →
+         approval_store.reject; ``approve`` → approval_store.approve
+         (mirrors the REST endpoint for all-WS UIs).
+      6. On disconnect / agent finish: cancel provider, clear active
+         session, release mode lock, disconnect FL.
+    """
+    from studiomind.learning import codegen as codegen_mod
+    from studiomind.learning import session_state as ss
+    from studiomind.learning import mode_lock as _ml
+    from studiomind.learning.approval_tokens import ApprovalStore
+    from studiomind.logging_setup import find_repo_root
+    from studiomind.web.training_provider import WsReadbackProvider
+
+    await ws.accept()
+    loop = asyncio.get_event_loop()
+
+    # API key gate.
+    if not get_anthropic_key():
+        await ws.send_json({
+            "type": "needs_setup",
+            "content": "Configure your Anthropic API key first (Settings panel).",
+        })
+        await ws.close()
+        return
+
+    # Wait for the start message.
+    try:
+        first = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+
+    if first.get("type") != "start":
+        await ws.send_json({
+            "type": "error",
+            "content": f"First message must be {{type:'start'}}; got {first.get('type')!r}.",
+        })
+        await ws.close()
+        return
+
+    plugin_name = (first.get("plugin_name") or "").strip()
+    if not plugin_name:
+        await ws.send_json({"type": "error", "content": "plugin_name is required."})
+        await ws.close()
+        return
+
+    try:
+        track_id = int(first["track_id"])
+        slot = int(first["slot"])
+    except (KeyError, ValueError, TypeError):
+        await ws.send_json({"type": "error", "content": "track_id and slot must be integers."})
+        await ws.close()
+        return
+
+    fl_version = str(first.get("fl_version") or "unknown")
+    skill_name = (first.get("skill_name") or "").strip() or codegen_mod.default_skill_name(plugin_name)
+    tool_name = (first.get("tool_name") or "").strip() or codegen_mod.default_tool_name(plugin_name)
+    resume = bool(first.get("resume", False))
+
+    # Mode lock.
+    try:
+        _ml.acquire_mode("training", path=_ml.LOCK_PATH)
+    except _ml.ModeLockError as e:
+        await ws.send_json({"type": "error", "content": f"Could not acquire training mode: {e}"})
+        await ws.close()
+        return
+
+    repo_root = find_repo_root()
+    if repo_root is None:
+        await ws.send_json({
+            "type": "error",
+            "content": "Cannot locate the studiomind repo (editable install required).",
+        })
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
+        except Exception:
+            pass
+        await ws.close()
+        return
+
+    # Connect to FL Studio.
+    try:
+        fl = _build_training_fl()
+    except Exception as e:
+        await ws.send_json({"type": "error", "content": f"Could not connect to FL Studio: {e}"})
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
+        except Exception:
+            pass
+        await ws.close()
+        return
+
+    # Provider + orchestrator + agent.
+    out_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _send_event(event: dict[str, Any]) -> None:
+        await out_queue.put(event)
+
+    provider = WsReadbackProvider(_send_event, loop, timeout=600.0)
+    approval_store = ApprovalStore()
+
+    if resume:
+        from studiomind.agent.learning_loop import resume_orchestrator
+        orch = resume_orchestrator(
+            fl=fl, repo_root=repo_root,
+            plugin_name=plugin_name, skill_name=skill_name,
+            tool_name=tool_name, fl_version=fl_version,
+            track_id=track_id, slot=slot,
+            readback_provider=provider,
+            approval_store=approval_store,
+        )
+        if orch is None:
+            await ws.send_json({"type": "error", "content": "No in-flight session to resume."})
+            try:
+                fl.disconnect()
+            except Exception:
+                pass
+            try:
+                _ml.release_mode(path=_ml.LOCK_PATH)
+            except Exception:
+                pass
+            await ws.close()
+            return
+    else:
+        if ss.load() is not None:
+            await ws.send_json({
+                "type": "error",
+                "content": "An unfinished training session exists. Pass resume=true or discard it.",
+            })
+            try:
+                fl.disconnect()
+            except Exception:
+                pass
+            try:
+                _ml.release_mode(path=_ml.LOCK_PATH)
+            except Exception:
+                pass
+            await ws.close()
+            return
+        orch = _build_training_orchestrator(
+            fl=fl, repo_root=repo_root,
+            plugin_name=plugin_name, skill_name=skill_name,
+            tool_name=tool_name, fl_version=fl_version,
+            track_id=track_id, slot=slot,
+            readback_provider=provider,
+            approval_store=approval_store,
+            session_path=ss.SESSION_PATH,
+        )
+
+    def _emit_threadsafe(event: dict[str, Any]) -> None:
+        asyncio.run_coroutine_threadsafe(out_queue.put(event), loop)
+
+    def on_message(text: str) -> None:
+        _emit_threadsafe({"type": "assistant", "content": text})
+
+    def on_tool_call(name: str, args: dict[str, Any]) -> None:
+        # Truncate large args so the UI's tool-call ribbon stays readable.
+        preview = args
+        try:
+            text = json.dumps(args, default=str)
+            if len(text) > 400:
+                preview = {"_truncated": text[:400] + "..."}
+        except Exception:
+            pass
+        _emit_threadsafe({"type": "tool_call", "tool": name, "input": preview})
+
+    def on_tool_result(name: str, result: dict[str, Any]) -> None:
+        # Upgrade approval-token tool results to dedicated UI events.
+        if name == "request_writes_approval" and isinstance(result, dict) and "token" in result:
+            _emit_threadsafe({
+                "type": "proposed_writes",
+                "token": result["token"],
+                "payload": result.get("payload", []),
+            })
+            return
+        if name == "request_commit_approval" and isinstance(result, dict) and "token" in result:
+            _emit_threadsafe({
+                "type": "proposed_commit",
+                "token": result["token"],
+                "proposal": result.get("proposal", {}),
+            })
+            return
+        _emit_threadsafe({"type": "tool_result", "tool": name, "result": result})
+
+    def on_step(step: str) -> None:
+        _emit_threadsafe({"type": "step", "step": step})
+
+    agent = _build_training_agent(
+        orch,
+        on_message=on_message, on_tool_call=on_tool_call,
+        on_tool_result=on_tool_result, on_step=on_step,
+    )
+
+    # Register so /api/training/approve can find this store + payload.
+    handle = TrainingSessionHandle(
+        approval_store=approval_store,
+        current_writes_payload=lambda: orch.write_queue.to_payload(),
+        current_commit_payload=lambda: (
+            agent._dispatch_state.pending_commit_proposal.to_payload()
+            if agent._dispatch_state.pending_commit_proposal is not None
+            else None
+        ),
+    )
+    _set_active_training(handle)
+
+    await ws.send_json({
+        "type": "system",
+        "content": (
+            f"Training mode acquired. Acquiring '{plugin_name}' on track "
+            f"{track_id}, slot {slot} (FL {fl_version})."
+        ),
+    })
+    await ws.send_json({"type": "step", "step": orch.session.step})
+
+    # Three concurrent coroutines: send_loop drains the queue to the WS;
+    # recv_loop reads UI messages and routes them; agent_task runs the
+    # blocking agent.run in an executor.
+    finished = asyncio.Event()
+
+    async def send_loop() -> None:
+        while True:
+            event = await out_queue.get()
+            if event is None:
+                return
+            try:
+                await ws.send_json(event)
+            except Exception as e:
+                logger.debug("ws/training send failed: %s", e)
+                return
+
+    async def recv_loop() -> None:
+        try:
+            while not finished.is_set():
+                msg = await ws.receive_json()
+                t = msg.get("type")
+                if t == "readback":
+                    provider.submit(str(msg.get("value", "")))
+                elif t == "stop":
+                    agent.request_stop()
+                    provider.cancel()
+                elif t == "approve":
+                    # Inline approval — mirror the REST flow over WS.
+                    token = str(msg.get("token", ""))
+                    action = msg.get("action")
+                    if action not in ("writes", "commit"):
+                        await out_queue.put({"type": "error", "content": "approve.action must be 'writes' or 'commit'."})
+                        continue
+                    canonical = (
+                        orch.write_queue.to_payload() if action == "writes"
+                        else (
+                            agent._dispatch_state.pending_commit_proposal.to_payload()
+                            if agent._dispatch_state.pending_commit_proposal else None
+                        )
+                    )
+                    if canonical is None:
+                        await out_queue.put({"type": "error", "content": "Nothing to approve yet."})
+                        continue
+                    try:
+                        approval_store.approve(token, action, canonical)
+                        await out_queue.put({"type": "approved", "action": action})
+                    except Exception as e:
+                        await out_queue.put({"type": "error", "content": f"Approve failed: {e}"})
+                elif t == "reject":
+                    approval_store.reject(str(msg.get("token", "")))
+                    await out_queue.put({"type": "rejected", "token": msg.get("token")})
+                else:
+                    logger.debug("ws/training: unknown message type %r", t)
+        except WebSocketDisconnect:
+            agent.request_stop()
+            provider.cancel()
+
+    async def agent_task() -> None:
+        try:
+            user_goal = f"Acquire {plugin_name} on track {track_id}, slot {slot}."
+            await loop.run_in_executor(None, agent.run, user_goal)
+            await out_queue.put({
+                "type": "done",
+                "step": orch.session.step,
+                "commit_sha": orch.session.commit_sha,
+                "summary": agent.last_text_response or "",
+            })
+        except Exception as e:
+            logger.exception("TrainingAgent.run crashed")
+            await out_queue.put({"type": "error", "content": f"Agent crashed: {e}"})
+        finally:
+            finished.set()
+            await out_queue.put(None)  # sentinel — wake send_loop to exit
+
+    sender = asyncio.create_task(send_loop())
+    receiver = asyncio.create_task(recv_loop())
+    runner = asyncio.create_task(agent_task())
+
+    try:
+        await runner
+        await sender
+    except WebSocketDisconnect:
+        agent.request_stop()
+        provider.cancel()
+    finally:
+        receiver.cancel()
+        provider.cancel()
+        _set_active_training(None)
+        try:
+            fl.disconnect()
+        except Exception:
+            pass
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
+        except Exception:
+            pass
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 def start(host: str = "127.0.0.1", port: int = 8040, reload: bool = False):
     """Start the StudioMind web server."""
     import uvicorn
