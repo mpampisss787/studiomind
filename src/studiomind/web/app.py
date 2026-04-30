@@ -737,6 +737,22 @@ async def websocket_chat(ws: WebSocket):
     _active_websockets.add(ws)
     loop = asyncio.get_event_loop()
 
+    # Gate 0: process-level mode lock — refuse to start a mixing session
+    # while training mode is held in this process. Symmetry with
+    # /ws/training, which acquires "training" on connect. Released in the
+    # outer finally below.
+    from studiomind.learning import mode_lock as _ml
+    try:
+        _ml.acquire_mode("mixing", path=_ml.LOCK_PATH)
+    except _ml.ModeLockError as e:
+        await ws.send_json({
+            "type": "error",
+            "content": f"Could not start mixing session: {e}",
+        })
+        await ws.close()
+        _active_websockets.discard(ws)
+        return
+
     # Gate 1: API key must be configured before we even try to connect.
     if not get_anthropic_key():
         await ws.send_json({
@@ -744,6 +760,10 @@ async def websocket_chat(ws: WebSocket):
             "content": "Please configure your Anthropic API key to start chatting.",
         })
         await ws.close()
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
+        except Exception:
+            pass
         return
 
     # Gate 2: FL Studio must be reachable over MIDI.
@@ -775,6 +795,10 @@ async def websocket_chat(ws: WebSocket):
     except Exception as e:
         await ws.send_json({"type": "error", "content": f"Could not connect to FL Studio: {e}"})
         await ws.close()
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
+        except Exception:
+            pass
         return
 
     # Gate 3: agent init (can fail if API key was just deleted or is bad).
@@ -832,6 +856,10 @@ async def websocket_chat(ws: WebSocket):
         await ws.send_json({"type": "error", "content": f"Agent init failed: {e}"})
         try:
             fl.disconnect()
+        except Exception:
+            pass
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
         except Exception:
             pass
         await ws.close()
@@ -905,6 +933,10 @@ async def websocket_chat(ws: WebSocket):
             pass
         try:
             fl.disconnect()
+        except Exception:
+            pass
+        try:
+            _ml.release_mode(path=_ml.LOCK_PATH)
         except Exception:
             pass
 
