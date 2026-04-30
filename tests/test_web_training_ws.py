@@ -391,3 +391,108 @@ def test_ws_training_rejects_first_message_other_than_start(
         event = ws.receive_json()
         assert event["type"] == "error"
         assert "start" in event["content"].lower()
+
+
+def test_ws_training_streams_param_id_in_tool_results(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The per-param progress sidebar relies on tool_result events
+    carrying param_id for classify/sweep/fit/validate. The orchestrator's
+    tool outputs don't include it, so the WS layer pairs it from the
+    matching tool_call.input."""
+    from studiomind.web import app as app_module
+
+    monkeypatch.setattr(app_module, "get_anthropic_key", lambda: "sk-test-fake")
+    from studiomind import logging_setup
+    monkeypatch.setattr(logging_setup, "find_repo_root", lambda: repo_root)
+
+    fl_holder: dict[str, FakeFL] = {}
+    def fake_build_fl():
+        fl = FakeFL()
+        fl_holder["fl"] = fl
+        return fl
+    monkeypatch.setattr(app_module, "_build_training_fl", fake_build_fl)
+
+    scripted = _make_scripted_client()
+    def fake_build_agent(orch, *, on_message, on_tool_call,
+                        on_tool_result, on_step):
+        from studiomind.agent.learning_loop import (
+            TrainingAgent, TrainingAgentConfig,
+        )
+        return TrainingAgent(
+            orch,
+            config=TrainingAgentConfig(
+                model="claude-mock", max_turns=80,
+                on_message=on_message, on_tool_call=on_tool_call,
+                on_tool_result=on_tool_result, on_step=on_step,
+            ),
+            anthropic_client=scripted,
+        )
+    monkeypatch.setattr(app_module, "_build_training_agent", fake_build_agent)
+
+    client = TestClient(app_module.app)
+    app_module._set_active_training(None)
+
+    readbacks = (
+        CLASSIFY_THRESHOLD + CLASSIFY_STYLE + CLASSIFY_MIX
+        + SWEEP_THRESHOLD + SWEEP_MIX
+        + VAL_THRESHOLD + VAL_MIX
+    )
+    rb = list(readbacks)
+
+    classify_results: list[dict] = []
+    sweep_results: list[dict] = []
+    fit_results: list[dict] = []
+    validate_results: list[dict] = []
+
+    with client.websocket_connect("/ws/training") as ws:
+        ws.send_json({
+            "type": "start",
+            "plugin_name": "Demo Plugin",
+            "skill_name": "demo_plugin",
+            "tool_name": "set_demo",
+            "fl_version": "21.2.10",
+            "track_id": 4,
+            "slot": 0,
+        })
+        while True:
+            ev = ws.receive_json()
+            t = ev.get("type")
+            if t == "request_readback":
+                ws.send_json({"type": "readback", "value": rb.pop(0)})
+            elif t == "proposed_writes":
+                ws.send_json({"type": "approve", "action": "writes", "token": ev["token"]})
+            elif t == "proposed_commit":
+                ws.send_json({"type": "approve", "action": "commit", "token": ev["token"]})
+            elif t == "tool_result":
+                if ev["tool"] == "classify_param":
+                    classify_results.append(ev["result"])
+                elif ev["tool"] == "sweep_param":
+                    sweep_results.append(ev["result"])
+                elif ev["tool"] == "fit_param":
+                    fit_results.append(ev["result"])
+                elif ev["tool"] == "validate_param":
+                    validate_results.append(ev["result"])
+            elif t == "done":
+                break
+            elif t == "error":
+                pytest.fail(f"Unexpected error: {ev}")
+
+    # Three classify calls (params 0, 1, 2) — each result must carry param_id.
+    assert len(classify_results) == 3
+    classify_ids = sorted([r["param_id"] for r in classify_results])
+    assert classify_ids == [0, 1, 2]
+
+    # Two sweep calls (params 0, 2 — param 1 was enum).
+    assert len(sweep_results) == 2
+    assert sorted([r["param_id"] for r in sweep_results]) == [0, 2]
+
+    # Two fit calls.
+    assert len(fit_results) == 2
+    assert sorted([r["param_id"] for r in fit_results]) == [0, 2]
+    assert all(r.get("ok") for r in fit_results)
+
+    # Two validate calls.
+    assert len(validate_results) == 2
+    assert sorted([r["param_id"] for r in validate_results]) == [0, 2]
+    assert all(r.get("passed") for r in validate_results)

@@ -1170,10 +1170,23 @@ async def websocket_training(ws: WebSocket):
     def _emit_threadsafe(event: dict[str, Any]) -> None:
         asyncio.run_coroutine_threadsafe(out_queue.put(event), loop)
 
+    # Pair tool_call.input.param_id with the matching tool_result so the
+    # UI can drive its per-param progress sidebar. Tools run sequentially
+    # so a single dict-by-name slot is race-free.
+    last_param_id_by_tool: dict[str, int] = {}
+
     def on_message(text: str) -> None:
         _emit_threadsafe({"type": "assistant", "content": text})
 
     def on_tool_call(name: str, args: dict[str, Any]) -> None:
+        # Capture the param_id from the call so on_tool_result can
+        # merge it into the result event (the orchestrator's tool
+        # outputs don't include param_id today).
+        if isinstance(args, dict) and "param_id" in args:
+            try:
+                last_param_id_by_tool[name] = int(args["param_id"])
+            except (TypeError, ValueError):
+                pass
         # Truncate large args so the UI's tool-call ribbon stays readable.
         preview = args
         try:
@@ -1200,7 +1213,11 @@ async def websocket_training(ws: WebSocket):
                 "proposal": result.get("proposal", {}),
             })
             return
-        _emit_threadsafe({"type": "tool_result", "tool": name, "result": result})
+        # Inject param_id into per-param tool results.
+        result_to_send = result
+        if name in last_param_id_by_tool and isinstance(result, dict):
+            result_to_send = {**result, "param_id": last_param_id_by_tool.pop(name)}
+        _emit_threadsafe({"type": "tool_result", "tool": name, "result": result_to_send})
 
     def on_step(step: str) -> None:
         _emit_threadsafe({"type": "step", "step": step})

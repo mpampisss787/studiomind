@@ -479,34 +479,71 @@
         .forEach(([id, info]) => {
           const row = document.createElement('div');
           row.className = 'param-row';
-          const status = info.validated ? 'validated' :
-                         info.fit ? 'fitted' :
-                         info.kind === 'continuous' ? 'sweeping' :
-                         info.kind === 'enum' ? 'enum' :
-                         '—';
+          const status = paramStatusLabel(info);
+          const cls = paramStatusClass(info);
           row.innerHTML = `
             <span class="param-name">${escapeHtml(info.name || `Param ${id}`)}</span>
-            <span class="param-status ${status === 'validated' ? 'validated' : status === 'fitted' ? 'fitted' : status === 'sweeping' ? 'sweeping' : ''}">${status}</span>
+            <span class="param-status ${cls}">${status}</span>
           `;
           paramsList.appendChild(row);
         });
     }
 
+    function paramStatusLabel(info) {
+      if (info.validated) return 'validated';
+      if (info.failed) return 'failed';
+      if (info.fit) return `fitted (R² ${(info.fit.r_squared || 0).toFixed(3)})`;
+      if (info.samples_count) return `${info.samples_count} samples`;
+      if (info.kind === 'continuous') return 'sweeping';
+      if (info.kind === 'enum') return 'enum';
+      if (info.kind === 'ambiguous') return 'ambiguous';
+      return '—';
+    }
+
+    function paramStatusClass(info) {
+      if (info.validated) return 'validated';
+      if (info.failed) return 'failed';
+      if (info.fit) return 'fitted';
+      if (info.kind === 'continuous' || info.samples_count) return 'sweeping';
+      return '';
+    }
+
     function updateParamFromTool(toolName, result) {
-      // Heuristic: peek into tool results to update progress panel.
-      if (toolName === 'enumerate' && result && Array.isArray(result.params)) {
+      if (!result || typeof result !== 'object') return;
+      if (toolName === 'enumerate' && Array.isArray(result.params)) {
         params.clear();
         result.params.forEach(p => {
           params.set(p.id, {name: p.name, kind: null});
         });
         renderParams();
-      } else if (toolName === 'classify_param' && result && result.kind) {
-        // We don't know the param_id from the result alone; skip.
-      } else if (toolName === 'fit_param' && result && result.ok && result.fit) {
-        // Likewise.
-      } else if (toolName === 'validate_param' && result && result.passed) {
-        // Likewise.
+        return;
       }
+      const pid = result.param_id;
+      if (typeof pid !== 'number') return;
+      const info = params.get(pid) || {name: `Param ${pid}`};
+
+      if (toolName === 'classify_param' && result.kind) {
+        info.kind = result.kind;
+      } else if (toolName === 'set_param_kind_manual') {
+        // Result is just {ok:true}; the UI doesn't know the new kind
+        // here — the tool_call ribbon already showed it. Skip.
+      } else if (toolName === 'sweep_param') {
+        info.samples_count = (result.samples || []).length;
+        info.kind = info.kind || 'continuous';
+      } else if (toolName === 'fit_param') {
+        if (result.ok && result.fit) {
+          info.fit = result.fit;
+          info.failed = false;
+        } else {
+          info.fit = null;
+          info.failed = true;
+        }
+      } else if (toolName === 'validate_param') {
+        info.validated = !!result.passed;
+        if (!result.passed) info.failed = true;
+      }
+      params.set(pid, info);
+      renderParams();
     }
 
     // ── Messages ─────────────────────────────────────────────────────
