@@ -289,3 +289,98 @@ def test_reject_unknown_token_is_idempotent(
     # Idempotent: returns 200 even when the token is unknown — the
     # store's reject() is a no-op for unknown tokens.
     assert r.status_code == 200
+
+
+# ───────────────────────────── /api/training/state ────────────────────
+
+
+@pytest.fixture
+def session_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Redirect session_state.SESSION_PATH so each test gets a clean
+    file."""
+    from studiomind.learning import session_state as ss
+    p = tmp_path / "training-session.json"
+    monkeypatch.setattr(ss, "SESSION_PATH", p)
+    return p
+
+
+def test_state_returns_active_false_when_no_session(
+    web_client: TestClient, session_path: Path,
+) -> None:
+    r = web_client.get("/api/training/state")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["active"] is False
+    assert data["plugin_name"] is None
+
+
+def test_state_returns_session_summary(
+    web_client: TestClient, session_path: Path,
+) -> None:
+    """A persisted session reports plugin/step/params summary so the
+    UI can render the resume banner."""
+    from studiomind.learning import session_state as ss
+
+    sess = ss.TrainingSession.new(
+        "Demo Plugin", fl_version="21.2.10", track_id=4, slot=0,
+    )
+    sess.set_step("sweeping")
+    sess.upsert_param(ss.ParamRecord(id=0, name="Threshold", kind="continuous",
+                                     samples=[ss.SampleRecord(0.0, "-60", -60.0)]))
+    sess.upsert_param(ss.ParamRecord(id=1, name="Style", kind="enum",
+                                     enum_values={"hard": 0.0, "smooth": 1.0}))
+    sess.upsert_param(ss.ParamRecord(id=2, name="Mix", kind="continuous"))
+    sess.save(session_path)
+
+    r = web_client.get("/api/training/state")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["active"] is True
+    assert data["plugin_name"] == "Demo Plugin"
+    assert data["fl_version"] == "21.2.10"
+    assert data["track_id"] == 4
+    assert data["slot"] == 0
+    assert data["step"] == "sweeping"
+    assert data["skill_name_default"] == "demo_plugin"
+    assert data["tool_name_default"] == "set_demo_plugin"
+    assert data["params_summary"]["total"] == 3
+    assert data["params_summary"]["classified"] == 3   # all three have a kind
+    assert data["params_summary"]["swept"] == 1        # only param 0 has samples
+    assert data["params_summary"]["fitted"] == 0
+    assert data["params_summary"]["validated"] == 0
+
+
+def test_delete_state_discards_session_file(
+    web_client: TestClient, session_path: Path,
+) -> None:
+    from studiomind.learning import session_state as ss
+    sess = ss.TrainingSession.new("Demo", fl_version="x", track_id=0, slot=0)
+    sess.save(session_path)
+    assert session_path.exists()
+
+    r = web_client.delete("/api/training/state")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert not session_path.exists()
+
+
+def test_delete_state_idempotent_when_no_session(
+    web_client: TestClient, session_path: Path,
+) -> None:
+    r = web_client.delete("/api/training/state")
+    assert r.status_code == 200
+
+
+def test_delete_state_refuses_when_session_active(
+    web_client: TestClient, session_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The WS endpoint owns lifecycle while a session is active —
+    deleting the file out from under it would corrupt state."""
+    from studiomind.learning import session_state as ss
+    sess = ss.TrainingSession.new("Demo", fl_version="x", track_id=0, slot=0)
+    sess.save(session_path)
+    _install_active_session(monkeypatch, writes_payload=[])
+
+    r = web_client.delete("/api/training/state")
+    assert r.status_code == 409
+    assert session_path.exists()

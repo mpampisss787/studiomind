@@ -361,6 +361,18 @@
     <section class="chat-area">
       <!-- Setup form (shown until Start clicked) -->
       <div class="setup" id="setup">
+        <!-- Resume banner — populated from /api/training/state on load -->
+        <div id="resume-banner" style="display: none; padding: 14px 16px; background: rgba(245, 158, 11, 0.08); border: 1px solid var(--warning); border-radius: 10px; margin-bottom: 18px;">
+          <div style="font-size: 13px; color: var(--text); margin-bottom: 8px;">
+            <strong>In-flight session detected.</strong>
+            <span id="resume-summary" style="color: var(--text-muted);"></span>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="primary" id="btn-resume">Resume</button>
+            <button class="ghost" id="btn-discard-session">Discard</button>
+          </div>
+        </div>
+
         <h2>Acquire a plugin wrapper</h2>
         <p class="help">
           Load the plugin in FL Studio on a spare mixer track. Tell the
@@ -428,6 +440,82 @@
     let ws = null;
     let activeReadbackEl = null;
     const params = new Map();   // id → {name, kind, samples_count, fit, validated}
+
+    // ── Resume banner ────────────────────────────────────────────────
+    async function refreshResumeBanner() {
+      try {
+        const r = await fetch('/api/training/state');
+        const data = await r.json();
+        const banner = $('resume-banner');
+        if (!data.active) {
+          banner.style.display = 'none';
+          return;
+        }
+        const ps = data.params_summary || {};
+        const summaryParts = [
+          `<strong>${escapeHtml(data.plugin_name || 'unknown plugin')}</strong>`,
+          `step: ${escapeHtml(data.step || '?')}`,
+          `track ${data.track_id ?? '?'} / slot ${data.slot ?? '?'}`,
+        ];
+        if (ps.total) {
+          summaryParts.push(
+            `${ps.classified || 0}/${ps.total} classified`,
+            `${ps.fitted || 0}/${ps.total} fitted`,
+            `${ps.validated || 0}/${ps.total} validated`,
+          );
+        }
+        if (data.updated_at) {
+          const ago = humanizeAgo(data.updated_at);
+          if (ago) summaryParts.push(`updated ${ago}`);
+        }
+        $('resume-summary').innerHTML = ' &middot; ' + summaryParts.join(' &middot; ');
+        banner.style.display = 'block';
+
+        // Pre-fill defaults so Resume → Start works one-click.
+        if (data.plugin_name) $('plugin_name').value = data.plugin_name;
+        if (data.skill_name_default && !$('skill_name').value) {
+          $('skill_name').value = data.skill_name_default;
+        }
+        if (data.tool_name_default && !$('tool_name').value) {
+          $('tool_name').value = data.tool_name_default;
+        }
+        if (data.fl_version) $('fl_version').value = data.fl_version;
+        if (typeof data.track_id === 'number') $('track_id').value = data.track_id;
+        if (typeof data.slot === 'number') $('slot').value = data.slot;
+      } catch (e) {
+        console.warn('refreshResumeBanner failed', e);
+      }
+    }
+
+    function humanizeAgo(ts) {
+      const sec = Date.now() / 1000 - ts;
+      if (!isFinite(sec) || sec < 0) return '';
+      if (sec < 60) return 'just now';
+      if (sec < 3600) return `${Math.floor(sec / 60)} min ago`;
+      if (sec < 86400) return `${Math.floor(sec / 3600)} h ago`;
+      return `${Math.floor(sec / 86400)} d ago`;
+    }
+    refreshResumeBanner();
+
+    $('btn-resume').addEventListener('click', () => {
+      $('resume').checked = true;
+      $('btn-start').click();
+    });
+
+    $('btn-discard-session').addEventListener('click', async () => {
+      if (!confirm('Discard the in-flight training session? You will lose all collected samples.')) return;
+      try {
+        const r = await fetch('/api/training/state', {method: 'DELETE'});
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({detail: r.statusText}));
+          alert(`Discard failed: ${err.detail || r.statusText}`);
+          return;
+        }
+        $('resume-banner').style.display = 'none';
+      } catch (e) {
+        alert(`Discard failed: ${e.message}`);
+      }
+    });
 
     // ── Mode toggle ──────────────────────────────────────────────────
     async function refreshMode() {

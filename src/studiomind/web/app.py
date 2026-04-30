@@ -349,6 +349,82 @@ async def post_training_approve(payload: ApprovalRequest) -> ApprovalResponse:
     return ApprovalResponse(ok=True)
 
 
+class TrainingStateResponse(BaseModel):
+    """Summary of any persisted ~/StudioMind/state/training-session.json
+    so the UI can offer Resume / Discard before the user fills the
+    setup form again. ``active=false`` means there's no session on disk."""
+    active: bool
+    plugin_name: str | None = None
+    fl_version: str | None = None
+    track_id: int | None = None
+    slot: int | None = None
+    step: str | None = None
+    started_at: float | None = None
+    updated_at: float | None = None
+    session_id: str | None = None
+    skill_name_default: str | None = None
+    tool_name_default: str | None = None
+    params_summary: dict[str, int] | None = None
+
+
+@app.get("/api/training/state", response_model=TrainingStateResponse)
+async def get_training_state() -> TrainingStateResponse:
+    """Read the persisted training session (if any) and return a compact
+    summary the resume banner uses to pre-fill the setup form."""
+    from studiomind.learning import codegen as codegen_mod
+    from studiomind.learning import session_state as ss
+    sess = ss.load(ss.SESSION_PATH)
+    if sess is None:
+        return TrainingStateResponse(active=False)
+
+    classified = sum(1 for p in sess.params if p.kind in ("continuous", "enum"))
+    swept = sum(1 for p in sess.params if p.samples)
+    fitted = sum(1 for p in sess.params if p.selected_fit is not None)
+    validated = sum(
+        1 for p in sess.params
+        if p.validation_probes and all(v.ok for v in p.validation_probes)
+    )
+
+    return TrainingStateResponse(
+        active=True,
+        plugin_name=sess.plugin_name or None,
+        fl_version=sess.fl_version or None,
+        track_id=sess.track_id if sess.track_id >= 0 else None,
+        slot=sess.slot if sess.slot >= 0 else None,
+        step=sess.step,
+        started_at=sess.started_at or None,
+        updated_at=sess.updated_at or None,
+        session_id=sess.session_id or None,
+        skill_name_default=codegen_mod.default_skill_name(sess.plugin_name) if sess.plugin_name else None,
+        tool_name_default=codegen_mod.default_tool_name(sess.plugin_name) if sess.plugin_name else None,
+        params_summary={
+            "total": len(sess.params),
+            "classified": classified,
+            "swept": swept,
+            "fitted": fitted,
+            "validated": validated,
+        },
+    )
+
+
+@app.delete("/api/training/state", response_model=ApprovalResponse)
+async def delete_training_state() -> ApprovalResponse:
+    """Discard the persisted session — equivalent to clicking Discard
+    on the resume banner. Idempotent: deleting when no session exists
+    is a no-op."""
+    from studiomind.learning import session_state as ss
+    if _get_active_training() is not None:
+        # Don't let the UI nuke an in-flight session out from under
+        # the running agent — the WS endpoint owns lifecycle while the
+        # session is active.
+        raise HTTPException(
+            status_code=409,
+            detail="A training session is currently active — stop it before discarding.",
+        )
+    ss.discard(ss.SESSION_PATH)
+    return ApprovalResponse(ok=True)
+
+
 @app.post("/api/training/reject", response_model=ApprovalResponse)
 async def post_training_reject(payload: RejectRequest) -> ApprovalResponse:
     """User clicked Reject. Wakes any agent thread waiting on the
