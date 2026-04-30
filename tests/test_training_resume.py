@@ -174,12 +174,18 @@ def test_resume_after_simulated_kill_lands_same_commit(
 
     orch_b.codegen()
     write_token = orch_b.request_writes_approval()
+    orch_b.approval_store.approve(
+        write_token, "writes", orch_b.write_queue.to_payload(),
+    )
     orch_b.apply_writes(token=write_token)
     pytest_result = orch_b.run_pytest()
     assert pytest_result.all_passed, pytest_result.summary
 
     proposal = orch_b.build_commit_proposal()
     commit_token = orch_b.request_commit_approval(proposal)
+    orch_b.approval_store.approve(
+        commit_token, "commit", proposal.to_payload(),
+    )
     sha = orch_b.apply_commit(proposal, token=commit_token)
     assert len(sha) == 40
     assert orch_b.session.step == "done"
@@ -253,11 +259,17 @@ def test_resume_picks_up_after_codegen_kill(
 
     # Apply + commit lands as in the kill-free path.
     write_token = orch_b.request_writes_approval()
+    orch_b.approval_store.approve(
+        write_token, "writes", orch_b.write_queue.to_payload(),
+    )
     orch_b.apply_writes(token=write_token)
     pytest_result = orch_b.run_pytest()
     assert pytest_result.all_passed
     proposal = orch_b.build_commit_proposal()
     commit_token = orch_b.request_commit_approval(proposal)
+    orch_b.approval_store.approve(
+        commit_token, "commit", proposal.to_payload(),
+    )
     sha = orch_b.apply_commit(proposal, token=commit_token)
     assert len(sha) == 40
     assert orch_b.session.step == "done"

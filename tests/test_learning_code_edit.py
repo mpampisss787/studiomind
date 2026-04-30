@@ -101,6 +101,7 @@ def test_apply_proposed_writes_flushes_to_disk(
     )
 
     token = ce.request_writes_approval(queue, store)
+    store.approve(token, "writes", queue.to_payload())
     written = ce.apply_proposed_writes(queue, token=token, approval_store=store)
 
     assert len(written) == 2
@@ -114,6 +115,7 @@ def test_apply_proposed_writes_clears_queue(queue, store) -> None:
         queue, rel_path="src/studiomind/skills/test_skill/x.py", content="x = 1",
     )
     token = ce.request_writes_approval(queue, store)
+    store.approve(token, "writes", queue.to_payload())
     ce.apply_proposed_writes(queue, token=token, approval_store=store)
     # A second apply must fail (token consumed; queue empty payload
     # wouldn't match anyway).
@@ -208,6 +210,7 @@ def test_apply_commit_creates_commit(
         content="x = 1\n",
     )
     write_token = ce.request_writes_approval(queue, store)
+    store.approve(write_token, "writes", queue.to_payload())
     ce.apply_proposed_writes(queue, token=write_token, approval_store=store)
 
     # Now commit.
@@ -219,6 +222,7 @@ def test_apply_commit_creates_commit(
         trailers={"Skill-Acquired-Via": "studiomind-training-mode"},
     )
     commit_token = ce.request_commit_approval(proposal, store)
+    store.approve(commit_token, "commit", proposal.to_payload())
     sha = ce.apply_commit(proposal, token=commit_token, approval_store=store)
     assert len(sha) == 40
 
@@ -253,6 +257,7 @@ def test_apply_commit_rejects_paths_outside_skill(
         paths=["src/studiomind/skills/other_skill/wrapper.py"],   # not in the current skill
     )
     token = ce.request_commit_approval(proposal, store)
+    store.approve(token, "commit", proposal.to_payload())
     with pytest.raises(SandboxViolation):
         ce.apply_commit(proposal, token=token, approval_store=store)
 
@@ -267,6 +272,7 @@ def test_apply_commit_rejects_push_through_runner(
         queue, rel_path="src/studiomind/skills/test_skill/wrapper.py", content="x",
     )
     wt = ce.request_writes_approval(queue, store)
+    store.approve(wt, "writes", queue.to_payload())
     ce.apply_proposed_writes(queue, token=wt, approval_store=store)
 
     proposal = ce.CommitProposal(
@@ -276,6 +282,7 @@ def test_apply_commit_rejects_push_through_runner(
         paths=["src/studiomind/skills/test_skill/wrapper.py"],
     )
     token = ce.request_commit_approval(proposal, store)
+    store.approve(token, "commit", proposal.to_payload())
 
     # Inject a runner that tries to push — but apply_commit always
     # asks the runner only for `git add`, `git commit`, `git rev-parse`.

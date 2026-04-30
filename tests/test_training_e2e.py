@@ -192,6 +192,9 @@ def test_end_to_end_mock_acquisition(repo_root: Path, session_path: Path) -> Non
         "tool.py", "knowledge.md", "tests.py",
     }
     write_token = orch.request_writes_approval()
+    orch.approval_store.approve(
+        write_token, "writes", orch.write_queue.to_payload(),
+    )
     written = orch.apply_writes(token=write_token)
     skill_dir = repo_root / "src" / "studiomind" / "skills" / "demo_plugin"
     for fname in ("manifest.json", "wrapper.py", "tool.py",
@@ -234,6 +237,9 @@ def test_end_to_end_mock_acquisition(repo_root: Path, session_path: Path) -> Non
     # commit
     proposal = orch.build_commit_proposal()
     commit_token = orch.request_commit_approval(proposal)
+    orch.approval_store.approve(
+        commit_token, "commit", proposal.to_payload(),
+    )
 
     received_invocations: list[list[str]] = []
 

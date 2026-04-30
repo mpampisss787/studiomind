@@ -273,6 +273,11 @@ def test_training_agent_runs_full_acquisition_via_mock_llm(
 
             if kind == "tool_use_with_writes_token":
                 token = self._extract_last_token(messages)
+                # Simulate the UI's /api/training/approve POST landing
+                # between request_writes_approval and apply_writes.
+                orch.approval_store.approve(
+                    token, "writes", orch.write_queue.to_payload(),
+                )
                 return _Response(
                     [_tool_use(name_or_text, {"token": token})],
                     stop_reason="tool_use",
@@ -280,6 +285,16 @@ def test_training_agent_runs_full_acquisition_via_mock_llm(
 
             if kind == "tool_use_with_commit_token":
                 token = self._extract_last_token(messages)
+                # Simulate the UI's /api/training/approve POST landing
+                # between request_commit_approval and apply_commit.
+                from studiomind.agent.learning_tools import TrainingDispatchState
+                # The dispatch state holds the live CommitProposal — pull
+                # it off the agent so payload hashing matches.
+                proposal = agent._dispatch_state.pending_commit_proposal
+                assert proposal is not None
+                orch.approval_store.approve(
+                    token, "commit", proposal.to_payload(),
+                )
                 return _Response(
                     [_tool_use(name_or_text, {"token": token})],
                     stop_reason="tool_use",

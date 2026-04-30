@@ -349,6 +349,10 @@ def test_apply_writes_with_valid_token_lands_files(repo_root: Path, tmp_path: Pa
     ]:
         execute_training_tool(orch, name, args, state=state)
     approval = execute_training_tool(orch, "request_writes_approval", {}, state=state)
+    # Simulate the UI's /api/training/approve POST.
+    orch.approval_store.approve(
+        approval["token"], "writes", orch.write_queue.to_payload(),
+    )
     out = execute_training_tool(
         orch, "apply_writes", {"token": approval["token"]}, state=state,
     )
@@ -418,6 +422,9 @@ def test_commit_proposal_stays_in_dispatch_state(
     ]:
         execute_training_tool(orch, name, args, state=state)
     approval = execute_training_tool(orch, "request_writes_approval", {}, state=state)
+    orch.approval_store.approve(
+        approval["token"], "writes", orch.write_queue.to_payload(),
+    )
     execute_training_tool(orch, "apply_writes", {"token": approval["token"]}, state=state)
 
     out = execute_training_tool(orch, "build_commit_proposal", {}, state=state)
