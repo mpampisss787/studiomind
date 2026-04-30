@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudioMind — Training</title>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --surface-hover: #1a1a1a;
+      --border: #262626;
+      --text: #e5e5e5;
+      --text-muted: #737373;
+      --accent: #8b5cf6;
+      --accent-dim: #7c3aed20;
+      --tool-bg: #1a1520;
+      --tool-border: #2d2438;
+      --error: #ef4444;
+      --success: #22c55e;
+      --warning: #f59e0b;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      font-size: 14px;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Top bar ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .mode-toggle {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      font-size: 12px;
+    }
+    .mode-toggle button {
+      background: transparent;
+      color: var(--text-muted);
+      border: none;
+      padding: 6px 14px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .mode-toggle button.active {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+    .mode-toggle button:hover:not(.active) { background: var(--surface-hover); }
+
+    .top-right { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--text-muted); }
+    .top-right .pid { font-family: 'SF Mono','Fira Code',monospace; }
+
+    /* ── Layout ── */
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      grid-template-rows: 1fr;
+      min-height: 0;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .progress-panel { display: none; }
+    }
+
+    .progress-panel {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 18px 14px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    .progress-panel h3 {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .step-pill {
+      display: inline-block;
+      padding: 3px 8px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+    .params-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .param-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .param-name { color: var(--text); font-weight: 500; }
+    .param-status {
+      color: var(--text-muted);
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 10px;
+    }
+    .param-status.fitted { color: var(--success); }
+    .param-status.validated { color: var(--success); font-weight: 600; }
+    .param-status.failed { color: var(--error); }
+    .param-status.sweeping { color: var(--warning); }
+
+    .chat-area {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    /* ── Setup form ── */
+    .setup {
+      padding: 24px 32px;
+      max-width: 540px;
+    }
+    .setup h2 { font-size: 18px; margin-bottom: 8px; }
+    .setup p.help { color: var(--text-muted); font-size: 13px; margin-bottom: 18px; }
+    .setup .row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+    .setup .row label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .setup input, .setup select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .setup input:focus, .setup select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .setup .row.inline { flex-direction: row; align-items: center; gap: 8px; }
+    .setup .row.inline label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--text); }
+    .setup .row.two { flex-direction: row; gap: 12px; }
+    .setup .row.two > div { flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .setup-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary:hover { filter: brightness(1.1); }
+    button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.ghost {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 16px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.ghost:hover { color: var(--text); border-color: var(--text-muted); }
+    button.danger {
+      background: transparent;
+      color: var(--error);
+      border: 1px solid var(--error);
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button.danger:hover { background: rgba(239, 68, 68, 0.1); }
+    button.success {
+      background: var(--success);
+      color: black;
+      border: none;
+      border-radius: 6px;
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.success:hover { filter: brightness(1.1); }
+
+    /* ── Messages ── */
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .msg {
+      max-width: 720px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+    .msg.system {
+      background: var(--surface);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-style: italic;
+      align-self: center;
+      max-width: 90%;
+      text-align: center;
+    }
+    .msg.assistant {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      align-self: flex-start;
+    }
+    .msg.error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid var(--error);
+      color: var(--error);
+      align-self: stretch;
+    }
+    .msg.tool {
+      background: var(--tool-bg);
+      border: 1px solid var(--tool-border);
+      font-family: 'SF Mono','Fira Code',monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      max-width: 100%;
+      align-self: stretch;
+      padding: 6px 10px;
+    }
+    .msg.tool .tool-name { color: var(--accent); font-weight: 600; }
+    .msg.tool pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 0 0; color: var(--text-muted); font-size: 10px; }
+
+    /* ── Readback prompt ── */
+    .readback-prompt {
+      align-self: stretch;
+      max-width: 720px;
+      background: rgba(245, 158, 11, 0.08);
+      border: 1px solid var(--warning);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .readback-prompt .prompt-text { font-size: 14px; color: var(--text); margin-bottom: 8px; }
+    .readback-prompt .prompt-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+    .readback-prompt .input-row { display: flex; gap: 8px; }
+    .readback-prompt input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .readback-prompt input:focus { outline: none; border-color: var(--warning); }
+
+    /* ── Diff / commit preview ── */
+    .preview {
+      align-self: stretch;
+      max-width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .preview h4 { font-size: 13px; margin-bottom: 8px; color: var(--accent); }
+    .preview .file-list { font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; max-height: 320px; overflow-y: auto; }
+    .preview .file-entry { padding: 4px 0; border-bottom: 1px dashed var(--border); }
+    .preview .file-entry:last-child { border-bottom: none; }
+    .preview .file-path { color: var(--accent); font-weight: 500; }
+    .preview pre.file-content {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-top: 4px;
+      max-height: 200px;
+      overflow: auto;
+      font-size: 10px;
+      line-height: 1.4;
+      color: var(--text);
+    }
+    .preview .actions { display: flex; gap: 8px; margin-top: 12px; }
+    .preview .commit-meta { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.4; }
+    .preview .commit-meta .label { color: var(--text); font-weight: 600; }
+    .preview .commit-meta pre { font-family: 'SF Mono','Fira Code',monospace; white-space: pre-wrap; }
+
+    .input-row-stop {
+      padding: 10px 28px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .input-row-stop .conn-state { font-family: 'SF Mono','Fira Code',monospace; }
+    .conn-state.live { color: var(--success); }
+    .conn-state.dead { color: var(--error); }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <h1>StudioMind — Training</h1>
+      <div class="mode-toggle" id="mode-toggle">
+        <button data-mode="mixing" id="mode-btn-mixing">Mix</button>
+        <button data-mode="training" id="mode-btn-training" class="active">Train</button>
+      </div>
+    </div>
+    <div class="top-right">
+      <a href="/" id="link-mix">Open chat &rarr;</a>
+      <span class="pid" id="pid"></span>
+    </div>
+  </header>
+
+  <main>
+    <aside class="progress-panel">
+      <h3>Step</h3>
+      <span class="step-pill" id="step-pill">idle</span>
+      <h3 style="margin-top: 18px;">Plugin</h3>
+      <div id="plugin-meta" style="color: var(--text-muted);">—</div>
+      <h3 style="margin-top: 18px;">Parameters</h3>
+      <div class="params-list" id="params-list">
+        <div style="color: var(--text-muted); font-style: italic;">No params yet</div>
+      </div>
+    </aside>
+
+    <section class="chat-area">
+      <!-- Setup form (shown until Start clicked) -->
+      <div class="setup" id="setup">
+        <h2>Acquire a plugin wrapper</h2>
+        <p class="help">
+          Load the plugin in FL Studio on a spare mixer track. Tell the
+          wizard which track / slot, hit Start, and answer the readback
+          prompts as they arrive. Approve the diff at the end to commit.
+        </p>
+        <div class="row">
+          <label for="plugin_name">Plugin name *</label>
+          <input id="plugin_name" placeholder="e.g. Fruity Limiter" autofocus>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="skill_name">Skill name (auto if blank)</label>
+            <input id="skill_name" placeholder="fruity_limiter">
+          </div>
+          <div>
+            <label for="tool_name">Tool name (auto if blank)</label>
+            <input id="tool_name" placeholder="set_limiter">
+          </div>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="track_id">Track #</label>
+            <input id="track_id" type="number" min="0" value="5">
+          </div>
+          <div>
+            <label for="slot">FX slot</label>
+            <input id="slot" type="number" min="0" max="9" value="0">
+          </div>
+        </div>
+        <div class="row">
+          <label for="fl_version">FL version</label>
+          <input id="fl_version" placeholder="21.2.10" value="21.2.10">
+        </div>
+        <div class="row inline">
+          <input id="resume" type="checkbox">
+          <label for="resume">Resume an in-flight session (training-session.json)</label>
+        </div>
+        <div class="setup-actions">
+          <button class="primary" id="btn-start">Start training</button>
+          <button class="ghost" id="btn-discard" style="display:none;">Discard saved session</button>
+        </div>
+      </div>
+
+      <!-- Messages stream (shown after Start) -->
+      <div class="messages" id="messages" style="display: none;"></div>
+
+      <div class="input-row-stop" id="bottom-bar" style="display: none;">
+        <span class="conn-state dead" id="conn-state">disconnected</span>
+        <button class="danger" id="btn-stop">Stop</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const setup = $('setup');
+    const messages = $('messages');
+    const bottomBar = $('bottom-bar');
+    const stepPill = $('step-pill');
+    const paramsList = $('params-list');
+    const pluginMeta = $('plugin-meta');
+    const connState = $('conn-state');
+
+    let ws = null;
+    let activeReadbackEl = null;
+    const params = new Map();   // id → {name, kind, samples_count, fit, validated}
+
+    // ── Mode toggle ──────────────────────────────────────────────────
+    async function refreshMode() {
+      try {
+        const r = await fetch('/api/mode');
+        const data = await r.json();
+        $('pid').textContent = `pid ${data.this_pid} • ${data.mode}`;
+        $('mode-btn-mixing').classList.toggle('active', data.mode === 'mixing');
+        $('mode-btn-training').classList.toggle('active', data.mode === 'training');
+      } catch (e) {
+        console.warn('refreshMode failed', e);
+      }
+    }
+    refreshMode();
+
+    document.querySelectorAll('#mode-toggle button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const target = btn.dataset.mode;
+        const r = await fetch('/api/mode', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: target}),
+        });
+        if (target === 'mixing' && r.ok) {
+          window.location.href = '/';
+          return;
+        }
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({detail: r.statusText}));
+          alert(`Mode change failed: ${err.detail || r.statusText}`);
+        }
+        refreshMode();
+      });
+    });
+
+    // ── Step + params progress panel ─────────────────────────────────
+    function setStep(step) {
+      stepPill.textContent = step;
+    }
+
+    function renderParams() {
+      paramsList.innerHTML = '';
+      if (params.size === 0) {
+        paramsList.innerHTML = '<div style="color: var(--text-muted); font-style: italic;">No params yet</div>';
+        return;
+      }
+      Array.from(params.entries())
+        .sort((a, b) => a[0] - b[0])
+        .forEach(([id, info]) => {
+          const row = document.createElement('div');
+          row.className = 'param-row';
+          const status = info.validated ? 'validated' :
+                         info.fit ? 'fitted' :
+                         info.kind === 'continuous' ? 'sweeping' :
+                         info.kind === 'enum' ? 'enum' :
+                         '—';
+          row.innerHTML = `
+            <span class="param-name">${escapeHtml(info.name || `Param ${id}`)}</span>
+            <span class="param-status ${status === 'validated' ? 'validated' : status === 'fitted' ? 'fitted' : status === 'sweeping' ? 'sweeping' : ''}">${status}</span>
+          `;
+          paramsList.appendChild(row);
+        });
+    }
+
+    function updateParamFromTool(toolName, result) {
+      // Heuristic: peek into tool results to update progress panel.
+      if (toolName === 'enumerate' && result && Array.isArray(result.params)) {
+        params.clear();
+        result.params.forEach(p => {
+          params.set(p.id, {name: p.name, kind: null});
+        });
+        renderParams();
+      } else if (toolName === 'classify_param' && result && result.kind) {
+        // We don't know the param_id from the result alone; skip.
+      } else if (toolName === 'fit_param' && result && result.ok && result.fit) {
+        // Likewise.
+      } else if (toolName === 'validate_param' && result && result.passed) {
+        // Likewise.
+      }
+    }
+
+    // ── Messages ─────────────────────────────────────────────────────
+    function appendMsg(kind, content) {
+      const el = document.createElement('div');
+      el.className = `msg ${kind}`;
+      el.textContent = content;
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+      return el;
+    }
+
+    function appendTool(label, body) {
+      const el = document.createElement('div');
+      el.className = 'msg tool';
+      const truncated = JSON.stringify(body).slice(0, 600);
+      el.innerHTML = `<span class="tool-name">${escapeHtml(label)}</span><pre>${escapeHtml(truncated)}</pre>`;
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function appendReadbackPrompt(prompt, expectedUnit) {
+      // Remove any previous waiting prompt.
+      if (activeReadbackEl && activeReadbackEl.parentNode) {
+        activeReadbackEl.remove();
+        activeReadbackEl = null;
+      }
+      const el = document.createElement('div');
+      el.className = 'readback-prompt';
+      el.innerHTML = `
+        <div class="prompt-text">${escapeHtml(prompt)}</div>
+        <div class="prompt-hint">${expectedUnit ? `Expected unit: <strong>${escapeHtml(expectedUnit)}</strong> &middot; ` : ''}Right-click the FL knob &rarr; Edit value, then type the number here.</div>
+        <div class="input-row">
+          <input class="rb-input" placeholder="e.g. -12.5 dB" autofocus>
+          <button class="primary rb-submit">Submit</button>
+        </div>
+      `;
+      messages.appendChild(el);
+      activeReadbackEl = el;
+      messages.scrollTop = messages.scrollHeight;
+
+      const input = el.querySelector('.rb-input');
+      const submit = el.querySelector('.rb-submit');
+      const send = () => {
+        const value = input.value.trim();
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({type: 'readback', value}));
+        // Disable but keep visible — useful audit trail.
+        input.disabled = true;
+        submit.disabled = true;
+        submit.textContent = 'Sent';
+        activeReadbackEl = null;
+      };
+      submit.addEventListener('click', send);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); send(); }
+      });
+      input.focus();
+    }
+
+    function appendWritesPreview(token, payload) {
+      const el = document.createElement('div');
+      el.className = 'preview';
+      el.innerHTML = `
+        <h4>Approve writes (${payload.length} file${payload.length === 1 ? '' : 's'})</h4>
+        <div class="file-list"></div>
+        <div class="actions">
+          <button class="success btn-approve">Approve</button>
+          <button class="ghost btn-reject">Reject</button>
+        </div>
+      `;
+      const fileList = el.querySelector('.file-list');
+      payload.forEach(entry => {
+        const fe = document.createElement('div');
+        fe.className = 'file-entry';
+        fe.innerHTML = `<div class="file-path">${escapeHtml(entry.path)}</div><pre class="file-content">${escapeHtml((entry.content || '').slice(0, 4000))}</pre>`;
+        fileList.appendChild(fe);
+      });
+      el.querySelector('.btn-approve').addEventListener('click', () => {
+        ws.send(JSON.stringify({type: 'approve', action: 'writes', token}));
+        el.querySelector('.actions').innerHTML = '<span style="color: var(--success); font-weight: 600;">Approved &mdash; flushing to disk&hellip;</span>';
+      });
+      el.querySelector('.btn-reject').addEventListener('click', () => {
+        if (!confirm('Reject this write batch? The agent will abort the acquisition.')) return;
+        ws.send(JSON.stringify({type: 'reject', token}));
+        el.querySelector('.actions').innerHTML = '<span style="color: var(--error);">Rejected.</span>';
+      });
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function appendCommitPreview(token, proposal) {
+      const el = document.createElement('div');
+      el.className = 'preview';
+      const pathsHtml = (proposal.paths || []).map(p => `<li>${escapeHtml(p)}</li>`).join('');
+      const trailersHtml = Object.entries(proposal.trailers || {})
+        .map(([k, v]) => `<div><span class="label">${escapeHtml(k)}:</span> ${escapeHtml(v)}</div>`)
+        .join('');
+      el.innerHTML = `
+        <h4>Approve commit</h4>
+        <div class="commit-meta">
+          <div><span class="label">Message:</span></div>
+          <pre>${escapeHtml(proposal.message || '')}</pre>
+          <div style="margin-top: 6px;"><span class="label">Files:</span><ul>${pathsHtml}</ul></div>
+          <div style="margin-top: 6px;"><span class="label">Trailers:</span></div>
+          ${trailersHtml}
+        </div>
+        <div class="actions">
+          <button class="success btn-approve">Approve commit</button>
+          <button class="ghost btn-reject">Reject</button>
+        </div>
+      `;
+      el.querySelector('.btn-approve').addEventListener('click', () => {
+        ws.send(JSON.stringify({type: 'approve', action: 'commit', token}));
+        el.querySelector('.actions').innerHTML = '<span style="color: var(--success); font-weight: 600;">Approved &mdash; committing&hellip;</span>';
+      });
+      el.querySelector('.btn-reject').addEventListener('click', () => {
+        if (!confirm('Reject this commit? The agent will abort.')) return;
+        ws.send(JSON.stringify({type: 'reject', token}));
+        el.querySelector('.actions').innerHTML = '<span style="color: var(--error);">Rejected.</span>';
+      });
+      messages.appendChild(el);
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // ── Start ────────────────────────────────────────────────────────
+    $('btn-start').addEventListener('click', () => {
+      const plugin_name = $('plugin_name').value.trim();
+      if (!plugin_name) { alert('Plugin name required'); return; }
+      const track_id = parseInt($('track_id').value, 10);
+      const slot = parseInt($('slot').value, 10);
+      const fl_version = $('fl_version').value.trim() || 'unknown';
+      const skill_name = $('skill_name').value.trim();
+      const tool_name = $('tool_name').value.trim();
+      const resume = $('resume').checked;
+
+      pluginMeta.textContent = `${plugin_name} (track ${track_id}, slot ${slot})`;
+      setup.style.display = 'none';
+      messages.style.display = 'flex';
+      bottomBar.style.display = 'flex';
+      messages.innerHTML = '';
+      params.clear();
+      renderParams();
+
+      const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/training';
+      ws = new WebSocket(wsUrl);
+      connState.textContent = 'connecting';
+      connState.className = 'conn-state';
+
+      ws.onopen = () => {
+        connState.textContent = 'live';
+        connState.className = 'conn-state live';
+        ws.send(JSON.stringify({
+          type: 'start',
+          plugin_name, track_id, slot, fl_version,
+          skill_name: skill_name || undefined,
+          tool_name: tool_name || undefined,
+          resume,
+        }));
+      };
+      ws.onclose = () => {
+        connState.textContent = 'disconnected';
+        connState.className = 'conn-state dead';
+      };
+      ws.onerror = (e) => {
+        appendMsg('error', `WebSocket error: ${e.message || 'unknown'}`);
+      };
+      ws.onmessage = (event) => {
+        let msg;
+        try { msg = JSON.parse(event.data); }
+        catch (e) { console.error('bad WS frame', event.data); return; }
+        handleEvent(msg);
+      };
+    });
+
+    function handleEvent(msg) {
+      switch (msg.type) {
+        case 'system':
+          appendMsg('system', msg.content);
+          break;
+        case 'assistant':
+          appendMsg('assistant', msg.content);
+          break;
+        case 'error':
+          appendMsg('error', msg.content);
+          break;
+        case 'needs_setup':
+          appendMsg('error', msg.content + ' Open the home page to configure your API key.');
+          break;
+        case 'tool_call':
+          appendTool(msg.tool, msg.input || {});
+          break;
+        case 'tool_result':
+          appendTool(msg.tool + ' →', msg.result || {});
+          updateParamFromTool(msg.tool, msg.result);
+          break;
+        case 'request_readback':
+          appendReadbackPrompt(msg.prompt, msg.expected_unit);
+          break;
+        case 'proposed_writes':
+          appendWritesPreview(msg.token, msg.payload || []);
+          break;
+        case 'proposed_commit':
+          appendCommitPreview(msg.token, msg.proposal || {});
+          break;
+        case 'step':
+          setStep(msg.step);
+          break;
+        case 'approved':
+          appendMsg('system', `Approval applied: ${msg.action}`);
+          break;
+        case 'rejected':
+          appendMsg('system', `Rejected token`);
+          break;
+        case 'done':
+          if (msg.commit_sha) {
+            appendMsg('system', `Done. Commit ${String(msg.commit_sha).slice(0, 8)} landed. ${msg.summary || ''}`);
+          } else {
+            appendMsg('system', `Done (step: ${msg.step}). ${msg.summary || ''}`);
+          }
+          setStep(msg.step || 'done');
+          refreshMode();
+          break;
+        default:
+          console.debug('unknown event', msg);
+      }
+    }
+
+    $('btn-stop').addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'stop'}));
+      }
+    });
+  </script>
+</body>
+</html>
