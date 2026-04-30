@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args
 
@@ -51,6 +53,42 @@ _active_stop_event: threading.Event | None = None
 # Every connected client's WebSocket — used to broadcast `file_dropped`
 # events so any open tab sees the routing pill in its chat thread.
 _active_websockets: "set[WebSocket]" = set()
+
+
+# ───────────────────────── Training session registry ──────────────────────
+#
+# Only one /ws/training session can be live at a time (the mode lock
+# enforces this at the process level too). The websocket handler
+# registers its handle here on connect and clears it on disconnect.
+# /api/training/approve looks up the active handle to find the
+# ApprovalStore and the canonical write/commit payload.
+
+@dataclass
+class TrainingSessionHandle:
+    """Live handle to the running training session, exposed to the
+    approval-flow endpoints. ``current_writes_payload`` /
+    ``current_commit_payload`` are callables (not snapshots) so the
+    approve endpoint always sees the orchestrator's live state — if
+    the agent mutated the queue between issuing the token and the
+    user's click, the payload hash will mismatch and approve() rejects."""
+    approval_store: "Any"   # ApprovalStore — Any to avoid import cycle here
+    current_writes_payload: "Any"   # Callable[[], list]
+    current_commit_payload: "Any"   # Callable[[], dict | None]
+
+
+_active_training_session: "TrainingSessionHandle | None" = None
+_active_training_lock: threading.Lock = threading.Lock()
+
+
+def _set_active_training(handle: "TrainingSessionHandle | None") -> None:
+    global _active_training_session
+    with _active_training_lock:
+        _active_training_session = handle
+
+
+def _get_active_training() -> "TrainingSessionHandle | None":
+    with _active_training_lock:
+        return _active_training_session
 
 app = FastAPI(title="StudioMind")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -206,6 +244,124 @@ async def stop_agent():
     if _active_stop_event:
         _active_stop_event.set()
     return {"ok": True}
+
+
+# ─────────────────────────── Mode lock API ────────────────────────────
+
+class ModeStateResponse(BaseModel):
+    mode: str
+    pid: int | None
+    this_pid: int
+    acquired_at: float
+
+
+class ModeChangePayload(BaseModel):
+    mode: Literal["mixing", "training", "idle"]
+
+
+@app.get("/api/mode", response_model=ModeStateResponse)
+async def get_mode() -> ModeStateResponse:
+    # Look up LOCK_PATH dynamically (not via the function's default arg)
+    # so tests can redirect it via monkeypatch.
+    from studiomind.learning import mode_lock as _ml
+    state = _ml.read_lock(_ml.LOCK_PATH)
+    return ModeStateResponse(
+        mode=state.mode,
+        pid=state.pid,
+        this_pid=os.getpid(),
+        acquired_at=state.acquired_at,
+    )
+
+
+@app.post("/api/mode", response_model=ModeStateResponse)
+async def post_mode(payload: ModeChangePayload) -> ModeStateResponse:
+    """Transition the process-level mode lock.
+
+    The mixing/training agents both refuse to start unless the lock is
+    held in the matching mode, so flipping this is the gate the UI uses
+    when the user toggles Mix↔Train at the top of the page.
+    """
+    from studiomind.learning import mode_lock as _ml
+    try:
+        if payload.mode == "idle":
+            state = _ml.release_mode(path=_ml.LOCK_PATH)
+        else:
+            state = _ml.acquire_mode(payload.mode, path=_ml.LOCK_PATH)
+    except _ml.ModeLockError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return ModeStateResponse(
+        mode=state.mode,
+        pid=state.pid,
+        this_pid=os.getpid(),
+        acquired_at=state.acquired_at,
+    )
+
+
+# ─────────────────────────── Training approval API ────────────────────
+
+class ApprovalRequest(BaseModel):
+    token: str = Field(..., min_length=8)
+    action: Literal["writes", "commit"]
+
+
+class ApprovalResponse(BaseModel):
+    ok: bool
+
+
+class RejectRequest(BaseModel):
+    token: str = Field(..., min_length=8)
+
+
+@app.post("/api/training/approve", response_model=ApprovalResponse)
+async def post_training_approve(payload: ApprovalRequest) -> ApprovalResponse:
+    """User clicked Approve in the UI for a queued write or commit.
+
+    The endpoint re-derives the canonical payload from the active
+    session's orchestrator (the queue or pending commit proposal) so
+    the approve call uses the same hash the token was minted with.
+    Mutations between issue and approve fail the hash check, exactly
+    as the design doc requires.
+    """
+    from studiomind.learning.approval_tokens import ApprovalError
+
+    handle = _get_active_training()
+    if handle is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No active training session — start one before approving.",
+        )
+
+    if payload.action == "writes":
+        canonical_payload: Any = handle.current_writes_payload()
+    else:
+        canonical_payload = handle.current_commit_payload()
+        if canonical_payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail="No commit proposal pending — agent must call build_commit_proposal first.",
+            )
+
+    try:
+        handle.approval_store.approve(payload.token, payload.action, canonical_payload)
+    except ApprovalError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    logger.info("Training approval granted: action=%s", payload.action)
+    return ApprovalResponse(ok=True)
+
+
+@app.post("/api/training/reject", response_model=ApprovalResponse)
+async def post_training_reject(payload: RejectRequest) -> ApprovalResponse:
+    """User clicked Reject. Wakes any agent thread waiting on the
+    token with a ``rejected`` outcome so it can abort gracefully."""
+    handle = _get_active_training()
+    if handle is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No active training session.",
+        )
+    handle.approval_store.reject(payload.token)
+    logger.info("Training approval rejected by user")
+    return ApprovalResponse(ok=True)
 
 
 @app.post("/api/settings")
