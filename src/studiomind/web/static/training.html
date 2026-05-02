@@ -316,6 +316,13 @@
     .preview .commit-meta .label { color: var(--text); font-weight: 600; }
     .preview .commit-meta pre { font-family: 'SF Mono','Fira Code',monospace; white-space: pre-wrap; }
 
+    .msg.user {
+      background: var(--accent-dim);
+      border: 1px solid var(--accent);
+      align-self: flex-end;
+      color: var(--text);
+    }
+
     .input-row-stop {
       padding: 10px 28px;
       border-top: 1px solid var(--border);
@@ -325,7 +332,25 @@
       align-items: center;
       font-size: 12px;
       color: var(--text-muted);
+      gap: 12px;
     }
+    .chat-input-row {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+    }
+    .chat-input-row input {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .chat-input-row input:focus { outline: none; border-color: var(--accent); }
+    .chat-input-row input:disabled { opacity: 0.4; }
     .input-row-stop .conn-state { font-family: 'SF Mono','Fira Code',monospace; }
     .conn-state.live { color: var(--success); }
     .conn-state.dead { color: var(--error); }
@@ -421,8 +446,14 @@
       <div class="messages" id="messages" style="display: none;"></div>
 
       <div class="input-row-stop" id="bottom-bar" style="display: none;">
-        <span class="conn-state dead" id="conn-state">disconnected</span>
-        <button class="danger" id="btn-stop">Stop</button>
+        <div class="chat-input-row">
+          <input id="chat-input" placeholder="Type a message to the agent..." disabled>
+          <button class="ghost" id="btn-send" disabled>Send</button>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="conn-state dead" id="conn-state">disconnected</span>
+          <button class="danger" id="btn-stop">Stop</button>
+        </div>
       </div>
     </section>
   </main>
@@ -825,6 +856,8 @@
       ws.onopen = () => {
         connState.textContent = 'live';
         connState.className = 'conn-state live';
+        chatInput.disabled = false;
+        btnSend.disabled = false;
         ws.send(JSON.stringify({
           type: 'start',
           plugin_name, track_id, slot, fl_version,
@@ -836,6 +869,8 @@
       ws.onclose = () => {
         connState.textContent = 'disconnected';
         connState.className = 'conn-state dead';
+        chatInput.disabled = true;
+        btnSend.disabled = true;
       };
       ws.onerror = (e) => {
         appendMsg('error', `WebSocket error: ${e.message || 'unknown'}`);
@@ -887,6 +922,9 @@
         case 'rejected':
           appendMsg('system', `Rejected token`);
           break;
+        case 'user_echo':
+          appendMsg('user', msg.content);
+          break;
         case 'done':
           if (msg.commit_sha) {
             appendMsg('system', `Done. Commit ${String(msg.commit_sha).slice(0, 8)} landed. ${msg.summary || ''}`);
@@ -900,6 +938,22 @@
           console.debug('unknown event', msg);
       }
     }
+
+    // ── Chat input ─────────────────────────────────────────────────
+    const chatInput = $('chat-input');
+    const btnSend = $('btn-send');
+
+    function sendChatMessage() {
+      const text = chatInput.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({type: 'user_message', content: text}));
+      chatInput.value = '';
+    }
+
+    btnSend.addEventListener('click', sendChatMessage);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+    });
 
     $('btn-stop').addEventListener('click', () => {
       if (ws && ws.readyState === WebSocket.OPEN) {

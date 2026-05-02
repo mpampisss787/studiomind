@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import threading
 import time
 from dataclasses import dataclass, field
@@ -640,6 +641,7 @@ class TrainingAgent:
         self._dispatch_state = TrainingDispatchState()
 
         self._final_text: str = ""
+        self._user_messages: queue.Queue[str] = queue.Queue()
 
     @property
     def orchestrator(self) -> TrainingOrchestrator:
@@ -651,6 +653,12 @@ class TrainingAgent:
 
     def request_stop(self) -> None:
         self._stop_event.set()
+
+    def inject_user_message(self, text: str) -> None:
+        """Queue a free-form user message. The agent loop picks it up
+        on the next turn boundary and injects it into the conversation.
+        Thread-safe — called from the WS recv coroutine."""
+        self._user_messages.put(text)
 
     def run(self, user_goal: str) -> str:
         """Drive the wizard end-to-end. Returns the agent's final text
@@ -728,6 +736,15 @@ class TrainingAgent:
                     self._config.on_message(text)
 
             if not tool_calls:
+                # Before exiting, check if the user sent a message through
+                # the chat input. If so, inject it and continue the loop
+                # so the agent can react.
+                user_msg = self._drain_user_messages()
+                if user_msg:
+                    log.info("No tool calls but user message queued — continuing")
+                    messages.append({"role": "assistant", "content": response.content})
+                    messages.append({"role": "user", "content": user_msg})
+                    continue
                 log.info("Training agent finished (no more tool calls)")
                 break
 
@@ -736,6 +753,13 @@ class TrainingAgent:
                 tool_results.append(self._execute_one_tool(tc, execute_training_tool))
 
             messages.append({"role": "assistant", "content": response.content})
+
+            # Merge any queued user messages into the tool results turn
+            # so the agent sees both the tool output and the user's comment.
+            user_msg = self._drain_user_messages()
+            if user_msg:
+                tool_results.append({"type": "text", "text": user_msg})
+
             messages.append({"role": "user", "content": tool_results})
 
             if response.stop_reason == "end_turn":
@@ -754,6 +778,17 @@ class TrainingAgent:
                 )
 
         return self._final_text
+
+    def _drain_user_messages(self) -> str:
+        """Drain all queued user messages into a single string.
+        Returns empty string if no messages are queued."""
+        parts: list[str] = []
+        while True:
+            try:
+                parts.append(self._user_messages.get_nowait())
+            except queue.Empty:
+                break
+        return "\n".join(parts)
 
     def _execute_one_tool(
         self,

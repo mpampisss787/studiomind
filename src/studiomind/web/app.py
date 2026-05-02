@@ -1376,6 +1376,11 @@ async def websocket_training(ws: WebSocket):
                 elif t == "reject":
                     approval_store.reject(str(msg.get("token", "")))
                     await out_queue.put({"type": "rejected", "token": msg.get("token")})
+                elif t == "user_message":
+                    text = str(msg.get("content", "")).strip()
+                    if text:
+                        agent.inject_user_message(text)
+                        await out_queue.put({"type": "user_echo", "content": text})
                 else:
                     logger.debug("ws/training: unknown message type %r", t)
         except WebSocketDisconnect:
