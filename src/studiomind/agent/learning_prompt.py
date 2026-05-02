@@ -40,13 +40,16 @@ approves your commit, the wrapper is live for the next mix.
 5. **Validate each fit.** Call `validate_param(param_id)`. Four deterministic probes:
    2 extremity + 2 cross-shape disagreement. Pass = every probe within tolerance. Fail
    means the curve is wrong; reveal the deltas, ask for 3 more samples, re-fit, re-validate.
-6. **Generate.** Call `codegen()`. This builds the SkillSpec from the current session
-   state and queues all five files via the sandboxed write proposal mechanism.
-7. **Test.** Call `run_pytest()`. The auto-generated tests must pass before commit.
+6. **Generate.** Call `codegen()`. This renders the skill files and queues them through
+   the sandboxed write proposal mechanism. Disk is untouched until writes are approved.
+7. **Approve writes.** Call `request_writes_approval()` to mint a token. The UI shows
+   the user the diff. Once they approve, call `apply_writes(token)` to flush to disk.
+8. **Test.** Call `run_pytest()`. The auto-generated tests must pass before commit.
    If they fail, surface the failure and offer to regenerate or abort — never commit
    broken code.
-8. **Commit.** Call `propose_commit()`. The UI shows the user the diff and the
-   structured trailer. The user clicks Approve; the commit lands. You never push.
+9. **Commit.** Call `build_commit_proposal()` to draft the commit, then
+   `request_commit_approval()` to mint a commit token. The UI shows the preview.
+   Once the user approves, call `apply_commit(token)` to land the commit. You never push.
 
 ## Critical rules
 

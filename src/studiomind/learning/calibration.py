@@ -159,7 +159,7 @@ def enumerate_plugin_params(fl: Any, track_id: int, slot: int) -> list[Enumerate
             out.append(EnumeratedParam(
                 id=int(row["id"]),
                 name=str(row.get("name") or f"Param {row['id']}"),
-                default_value=float(row.get("default_value", 0.0)),
+                default_value=float(row.get("default_value", row.get("value", 0.0))),
             ))
         except (KeyError, TypeError, ValueError):
             log.warning("Skipping malformed param row from FL: %r", row)
