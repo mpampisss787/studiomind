@@ -692,14 +692,14 @@
       }
       const el = document.createElement('div');
       el.className = 'readback-prompt';
-      if (isQuestion) {
-        el.style.borderColor = 'var(--accent)';
-        el.style.background = 'var(--accent-dim)';
-      }
 
       // If structured context is present, render a richer header.
       // Falls back to the raw prompt string when context is missing.
       const isQuestion = context && context.phase === 'question';
+      if (isQuestion) {
+        el.style.borderColor = 'var(--accent)';
+        el.style.background = 'var(--accent-dim)';
+      }
       let header = '';
       if (isQuestion) {
         header = `<div class="prompt-text"><strong>Question:</strong> ${escapeHtml(prompt)}</div>`;
