@@ -237,6 +237,28 @@ TRAINING_TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "ask_user",
+        "description": (
+            "Ask the user a free-form question and wait for their typed "
+            "response. Use when you need clarification — e.g. whether an "
+            "ambiguous param is continuous or enum, whether to skip a "
+            "param, or any other decision that requires human input. "
+            "Returns {answer: '...'}. ALWAYS use this instead of emitting "
+            "bare text when you need user input — bare text without a "
+            "tool call ends the session."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user.",
+                },
+            },
+            "required": ["question"],
+        },
+    },
+    {
         "name": "abort",
         "description": (
             "Mark the session aborted. Use when validation fails 3 "
@@ -438,6 +460,18 @@ def execute_training_tool(
             token=str(tool_input["token"]),
         )
         return {"ok": True, "sha": sha}
+
+    if tool_name == "ask_user":
+        from studiomind.learning.calibration import ReadbackContext
+        answer = orchestrator.readback_provider.request(
+            str(tool_input["question"]),
+            expected_unit="",
+            context=ReadbackContext(
+                phase="question", param_id=-1,
+                param_name="", step="",
+            ),
+        )
+        return {"answer": answer}
 
     if tool_name == "abort":
         orchestrator.abort(str(tool_input.get("reason", "agent abort")))

@@ -50,7 +50,7 @@ class CannedProvider:
     def __init__(self, responses: list[str]) -> None:
         self.responses = list(responses)
 
-    def request(self, prompt: str, *, expected_unit: str = "") -> str:
+    def request(self, prompt: str, *, expected_unit: str = "", context: Any = None) -> str:
         if not self.responses:
             return ""
         return self.responses.pop(0)
@@ -119,7 +119,7 @@ def test_tool_names_match_dispatcher_branches() -> None:
         "sweep_param", "fit_param", "validate_param",
         "codegen", "request_writes_approval", "apply_writes",
         "run_pytest", "build_commit_proposal", "request_commit_approval",
-        "apply_commit", "abort",
+        "apply_commit", "ask_user", "abort",
     }
     assert TRAINING_TOOL_NAMES == expected
 
@@ -454,6 +454,15 @@ def test_apply_commit_without_proposal_returns_error(
 
 
 # ───────────────────────────── abort + unknown ───────────────────────
+
+def test_ask_user_returns_answer(repo_root: Path, tmp_path: Path) -> None:
+    orch = _make_orch(repo_root, tmp_path, responses=["it is continuous"])
+    state = _state()
+    out = execute_training_tool(
+        orch, "ask_user", {"question": "Is Gain continuous or enum?"}, state=state,
+    )
+    assert out == {"answer": "it is continuous"}
+
 
 def test_abort_marks_session_aborted(repo_root: Path, tmp_path: Path) -> None:
     orch = _make_orch(repo_root, tmp_path)

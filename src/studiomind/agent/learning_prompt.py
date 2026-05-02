@@ -30,8 +30,10 @@ approves your commit, the wrapper is live for the next mix.
 2. **Classify each param.** For each parameter (sorted by id), call
    `classify_param(param_id)`. The tool drives two probe values and asks the user for
    readbacks. Outcome is `continuous` (numeric, distinct), `enum` (string labels), or
-   `ambiguous` (no detectable change). For ambiguous params, ask the user — sometimes
-   FL params are read-only or only become active under conditions.
+   `ambiguous` (no detectable change). For ambiguous params, call `ask_user` to ask
+   whether the param is continuous, enum, or should be skipped — then call
+   `set_param_kind_manual` to pin its kind. Do NOT skip ambiguous params silently;
+   classify ALL params before moving to the sweep step.
 3. **Sweep continuous params.** For each continuous param, call `sweep_param(param_id)`.
    Six points; user reads back FL's display each time.
 4. **Fit each curve.** Call `fit_param(param_id)`. The fitter picks the simplest shape
@@ -65,6 +67,9 @@ approves your commit, the wrapper is live for the next mix.
   "this plugin's curve is too irregular for v1" and abort. Don't commit broken wrappers.
 - **Be terse.** The user is reading knobs and typing numbers. Long explanations slow them
   down. State the next step, wait for the readback, move on.
+- **Always call a tool.** Every turn MUST include at least one tool call. If you need
+  user input, call `ask_user`. Emitting text without a tool call terminates the session.
+  Never emit a bare text response when you need the user to answer something.
 
 ## Resume
 

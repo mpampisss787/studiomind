@@ -661,11 +661,18 @@
       }
       const el = document.createElement('div');
       el.className = 'readback-prompt';
+      if (isQuestion) {
+        el.style.borderColor = 'var(--accent)';
+        el.style.background = 'var(--accent-dim)';
+      }
 
       // If structured context is present, render a richer header.
       // Falls back to the raw prompt string when context is missing.
+      const isQuestion = context && context.phase === 'question';
       let header = '';
-      if (context && context.phase) {
+      if (isQuestion) {
+        header = `<div class="prompt-text"><strong>Question:</strong> ${escapeHtml(prompt)}</div>`;
+      } else if (context && context.phase) {
         const phaseLabel = {
           classify: 'Classifying',
           sweep:    'Sweeping',
@@ -682,11 +689,15 @@
       }
 
       const unit = expectedUnit || (context && context.expected_unit) || '';
+      const hint = isQuestion
+        ? 'Type your answer below.'
+        : `${unit ? `Expected unit: <strong>${escapeHtml(unit)}</strong> &middot; ` : ''}Right-click the FL knob &rarr; Edit value, then type the number here.`;
+      const placeholder = isQuestion ? 'Type your answer...' : 'e.g. -12.5 dB';
       el.innerHTML = `
         ${header}
-        <div class="prompt-hint">${unit ? `Expected unit: <strong>${escapeHtml(unit)}</strong> &middot; ` : ''}Right-click the FL knob &rarr; Edit value, then type the number here.</div>
+        <div class="prompt-hint">${hint}</div>
         <div class="input-row">
-          <input class="rb-input" placeholder="e.g. -12.5 dB" autofocus>
+          <input class="rb-input" placeholder="${placeholder}" autofocus>
           <button class="primary rb-submit">Submit</button>
         </div>
       `;
